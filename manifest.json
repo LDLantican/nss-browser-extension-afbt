@@ -1,24 +1,19 @@
 {
   "manifest_version": 3,
-  "name": "NSS BuilderTrend Helper",
+  "name": "NSS Appfolio-To-Buildertrend Helper",
   "version": "1.0.0",
-  "description": "A plugin to automate BuilderTrend's job import.",
-  "permissions": ["tabs", "scripting", "activeTab"],
-  "host_permissions": [
-    "https://*.buildertrend.com/*",
-    "https://*.buildertrend.net/*"
-  ],
+  "description": "Import Appfolio Work Orders to Buildertrend efficiently.",
+  "permissions": ["storage", "tabs"],
+  "action": {
+    "default_popup": "popup.html"
+  },
   "content_scripts": [
     {
       "matches": [
-        "https://*.buildertrend.net/*",
-        "https://*.buildertrend.com/*"
+        "https://*.appfolio.com/maintenance/service_requests/work_orders"
       ],
-      "js": ["content.js"],
+      "js": ["work_orders.js"],
       "run_at": "document_idle"
     }
-  ],
-  "action": {
-    "default_popup": "popup.html"
-  }
+  ]
 }

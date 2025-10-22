@@ -1,124 +1,134 @@
 document.addEventListener("DOMContentLoaded", () => {
+  if (browser === undefined) var browser = chrome;
+
   const plugin = {
-    isActive: false,
-    isLoggedIn: false,
-    currentTab: null,
+    websites: ["buildertrend.net", "appfolio.com"],
 
-    mainContent: null,
-    alertSpan: null,
+    start: async function () {
+      // wip
 
-    errors: [],
-
-    init: async function () {
-      const alertSpan = document.querySelector("span#alert");
-      if (!alertSpan) return;
-      this.alertSpan = alertSpan;
-
-      const mainContent = document.querySelector("main");
-      if (!mainContent) return;
-      this.mainContent = mainContent;
-
-      this.currentTab = await this.getActiveTabURL();
-      if (!this.isOnBuilderTrend()) {
-        this.criticalError("Go to BuilderTrend to start importing.");
-        return;
+      // check if on Appfolio or Buildertrend
+      const currentTab = await this.getActiveTabURL();
+      if (!this.websites.some((domain) => currentTab.url.includes(domain))) {
+        this.criticalError(
+          "You must be on Appfolio or Buildertrend to use this plugin."
+        );
       }
 
-      this.isLoggedIn = await this.isLoggedInBuilderTrend();
-      if (!this.isLoggedIn) {
-        this.criticalError("Please login to BuilderTrend.");
-        return;
-      }
+      // propagate work orders from the storage
 
-      this.isActive = true;
+      // if work orders are not empty, show clear all button
+
+      this.load(false);
+    },
+
+    load: function (bool) {
+      setTimeout(() => {
+        document.body.setAttribute("data-loading", bool);
+      }, 0);
+    },
+
+    terminate: function () {
+      document.body.setAttribute("data-running", false);
+    },
+
+    alert(msg, option = { timeout: 10000 }) {
+      if (typeof msg !== "string") throw new Error("Invalid string.");
+      if (option.timeout !== undefined && typeof option.timeout !== "number")
+        throw new Error("Invalid timeout.");
+
+      const flash = this.queryElement("#flash");
+      if (!flash) throw new Error("Flash is missing.");
+
+      const li = document.createElement("li");
+      const p = document.createElement("p");
+      p.className = "alert";
+      p.textContent = msg;
+
+      li.appendChild(p);
+      flash.appendChild(li);
+
+      li.addEventListener("click", () => {
+        flash.removeChild(li);
+      });
+
+      setTimeout(() => {
+        flash.removeChild(li);
+      }, option.timeout);
+    },
+
+    error(msg, option = { persist: false, timeout: 10000 }) {
+      if (typeof msg !== "string") throw new Error("Invalid string.");
+      if (option.timeout !== undefined && typeof option.timeout !== "number")
+        throw new Error("Invalid timeout.");
+
+      const flash = this.queryElement("#flash");
+      if (!flash) throw new Error("Flash is missing.");
+
+      const li = document.createElement("li");
+      const p = document.createElement("p");
+      p.setAttribute("data-critical", option.persist);
+      p.className = "error";
+      p.textContent = msg;
+
+      li.appendChild(p);
+      flash.appendChild(li);
+
+      if (!option.persist) {
+        li.addEventListener("click", () => {
+          flash.removeChild(li);
+        });
+
+        setTimeout(() => {
+          flash.removeChild(li);
+        }, option.timeout);
+      }
     },
 
     criticalError: function (msg) {
-      this.isActive = false;
-      this.alertSpan.textContent = msg;
-      this.mainContent.setAttribute("data-shown", "false");
+      if (typeof msg !== "string") throw new Error("Invalid string.");
+
+      this.error(msg, { persist: true });
+      this.terminate();
     },
 
     queryElement: function (selector, timeout = 10000) {
-      // WIP
+      if (typeof selector !== "string") throw new Error("Invalid selector.");
+      if (timeout !== undefined && typeof timeout !== "number")
+        throw new Error("Invalid timeout.");
+
+      let element = document.querySelector(selector);
+      if (element) return element;
+
+      const startTime = Date.now();
+
+      while (!element && Date.now() - startTime < timeout) {
+        element = document.querySelector(selector);
+      }
+
+      return element;
     },
 
     getActiveTabURL: async function () {
-      const tabs = await chrome.tabs.query({
+      const [tab] = await browser.tabs.query({
         currentWindow: true,
         active: true,
       });
 
-      return tabs[0];
+      return tab;
     },
 
     listen: function (msg, sender, senderResponse) {
-      if (msg.type === "BT_AUTH_CHANGED") {
-        const auth = msg.data ? JSON.parse(msg.data) : null;
-
-        if (auth?.username) {
-          this.isLoggedIn = true;
-        } else {
-          this.isLoggedIn = false;
-        }
-      }
-
-      if (!this.isOnBuilderTrend()) {
-        this.criticalError("Go to BuilderTrend to start importing.");
-        return;
-      }
-
-      if (!this.isLoggedIn) {
-        this.criticalError("Please login to BuilderTrend.");
-        return;
-      }
-
-      if (!this.errors) {
-        this.alertSpan.textContent = "";
-        this.mainContent.setAttribute("data-shown", "true");
-      }
-    },
-
-    isOnBuilderTrend: function () {
-      const urls = ["buildertrend.net", "buildertrend.com"];
-      return urls.some((domain) => this.currentTab.url.includes(domain));
-    },
-
-    isLoggedInBuilderTrend: async function () {
-      try {
-        const response = await new Promise((resolve) => {
-          chrome.tabs.sendMessage(
-            this.currentTab.id,
-            { type: "GET_BT_AUTH" },
-            (res) => resolve(res)
-          );
-        });
-
-        if (chrome.runtime.lastError) {
-          this.criticalError("No content script detected or tab not ready.");
-          return false;
-        }
-
-        if (!response?.authData) return false;
-
-        const auth = JSON.parse(response.authData);
-        return Boolean(auth?.username);
-      } catch (err) {
-        console.error("Error checking Buildertrend auth: ", err);
-        return false;
-      }
+      // wip
     },
   };
 
   window.addEventListener("load", () => {
-    plugin.init();
-
-    setTimeout(() => {
-      document.body.setAttribute("data-loading", "false");
-    }, 0);
+    plugin.start();
   });
 
-  chrome.runtime.onMessage.addListener((msg, sender, senderResponse) => {
+  browser.runtime.onMessage.addListener((msg, sender, senderResponse) => {
     plugin.listen(msg, sender, senderResponse);
+    return true;
   });
 });
