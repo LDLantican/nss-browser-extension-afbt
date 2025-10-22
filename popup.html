@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="popup.css" />
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body data-loading="true">
+    <span id="alert"></span>
+    <main>
+      <form id="batch-job-import">
+        <input
+          type="file"
+          name="jobs"
+          accept=".csv"
+          autocomplete="off"
+          required
+        />
+        <button type="submit">Import Jobs</button>
+      </form>
+    </main>
+  </body>
+</html>

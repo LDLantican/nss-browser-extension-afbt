@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "NSS BuilderTrend Helper",
+  "version": "1.0.0",
+  "description": "A plugin to automate BuilderTrend's job import.",
+  "permissions": ["tabs", "scripting", "activeTab"],
+  "host_permissions": [
+    "https://*.buildertrend.com/*",
+    "https://*.buildertrend.net/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.buildertrend.net/*",
+        "https://*.buildertrend.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

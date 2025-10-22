@@ -1,0 +1,35 @@
+input,
+button {
+  min-width: 0px;
+  max-width: 100%;
+}
+
+body {
+  width: max-content;
+  max-width: 100%;
+  transition: opacity 250ms ease-in-out, background-color 250ms ease-in-out;
+}
+
+body[data-loading="true"] {
+  opacity: 0;
+  animation: loading 2.5s ease-in-out infinite both;
+}
+
+main[data-shown="false"] {
+  display: none;
+}
+
+@keyframes loading {
+  0%,
+  100% {
+    background-color: gray;
+  }
+  50% {
+    background-color: white;
+  }
+}
+
+#batch-job-import {
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
