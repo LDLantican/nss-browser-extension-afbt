@@ -43,7 +43,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const li = document.createElement("li");
       const p = document.createElement("p");
       p.className = "alert";
-      p.textContent = msg;
+      p.textContent = "\u26A0 " + msg;
 
       li.appendChild(p);
       flash.appendChild(li);
@@ -69,7 +69,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const p = document.createElement("p");
       p.setAttribute("data-critical", option.persist);
       p.className = "error";
-      p.textContent = msg;
+      p.textContent = "\u26A0 " + msg;
 
       li.appendChild(p);
       flash.appendChild(li);
