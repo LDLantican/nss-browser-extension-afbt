@@ -13,6 +13,8 @@ document.addEventListener("DOMContentLoaded", () => {
         this.criticalError(
           "You must be on Appfolio or Buildertrend to use this plugin."
         );
+        this.load(false);
+        return;
       }
 
       // propagate work orders from the storage
