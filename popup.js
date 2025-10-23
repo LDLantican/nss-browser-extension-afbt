@@ -168,7 +168,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const spanCity = document.createElement("span");
       spanCity.className = "city";
-      spanCity.textContent = (work_order.city || "") + ",";
+      spanCity.textContent = (work_order.city || "") + ", ";
 
       const spanState = document.createElement("span");
       spanState.className = "state";
@@ -176,7 +176,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const spanZip = document.createElement("span");
       spanZip.className = "zip";
-      spanZip.textContent = work_order.zip || "";
+      spanZip.textContent = " " + work_order.zip || "";
 
       pCityStateZip.appendChild(spanCity);
       pCityStateZip.appendChild(spanState);
