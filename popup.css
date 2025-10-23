@@ -107,7 +107,7 @@ h1 {
 #work-orders {
   list-style: none;
 
-  max-height: 500px;
+  max-height: 400px;
   overflow: auto;
 }
 
@@ -147,7 +147,7 @@ h1 {
   max-width: 55ch;
 
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
 
   /* white-space: nowrap; */
@@ -177,7 +177,7 @@ h1 {
 
 #work-orders .actions .icon {
   display: block;
-  width: 2rem;
+  width: 2.5rem;
   aspect-ratio: 1 / 1;
   padding: calc(var(--spacing) / 4);
 }
@@ -214,6 +214,10 @@ footer {
 footer button {
   font-size: 0.875rem;
   padding: calc(var(--spacing) / 4) calc(var(--spacing) / 2);
+}
+
+footer button[data-hidden="true"] {
+  display: none;
 }
 
 footer button.clear {

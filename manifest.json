@@ -10,9 +10,10 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*.appfolio.com/maintenance/service_requests/work_orders"
+        "https://*.appfolio.com/maintenance/service_requests/work_orders*"
       ],
       "js": ["work_orders.js"],
+      "css": ["work_orders.css"],
       "run_at": "document_idle"
     }
   ]
