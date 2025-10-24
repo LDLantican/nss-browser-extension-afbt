@@ -86,8 +86,9 @@
       });
     },
 
-    queryElement: function (selector) {
+    queryElement: function (selector, timeout = 10000) {
       if (typeof selector !== "string") throw new Error("Invalid selector.");
+      if (typeof timeout !== "number") throw new Error("Invalid timeout.");
 
       let element = document.querySelector(selector);
       if (element) return Promise.resolve(element);
@@ -98,11 +99,17 @@
 
           if (element) {
             obs.disconnect();
+            clearTimeout(timer);
             resolve(element);
           }
         });
 
         observer.observe(document.body, { childList: true, subtree: true });
+
+        const timer = setTimeout(() => {
+          observer.disconnect();
+          resolve(null);
+        }, timeout);
       });
     },
 
