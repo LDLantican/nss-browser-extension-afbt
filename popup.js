@@ -1,26 +1,16 @@
 document.addEventListener("DOMContentLoaded", () => {
-  if (browser === undefined) var browser = chrome;
+  if (typeof browser === "undefined") globalThis.browser = chrome;
 
   const plugin = {
     websites: ["buildertrend.net", "appfolio.com"],
     work_orders: new Map(),
 
     start: async function () {
-      // check if on Appfolio or Buildertrend
-      // const currentTab = await this.getActiveTabURL();
-      // if (!this.websites.some((domain) => currentTab.url.includes(domain))) {
-      //   this.criticalError(
-      //     "You must be on Appfolio or Buildertrend to use this plugin."
-      //   );
-      //   this.load(false);
-      //   return;
-      // }
-
       const clearButton = document.querySelector("footer button.clear");
       if (!clearButton) throw new Error("Clear button not found.");
 
       // propagate work orders from the storage
-      chrome.storage.local.get("work_orders", (result) => {
+      browser.storage.local.get("work_orders", (result) => {
         const data = result.work_orders || {};
         if (typeof data !== "object") throw new Error("Invalid map data.");
 
@@ -40,7 +30,7 @@ document.addEventListener("DOMContentLoaded", () => {
             // BUG: multiple confirmation when deleting 1 by 1 THEN clearing all at once
             // confirm("Clearing all work orders cannot be undone. Continue?");
 
-            chrome.storage.local.clear();
+            browser.storage.local.clear();
             clearButton.setAttribute("data-hidden", true);
           });
 
@@ -220,7 +210,9 @@ document.addEventListener("DOMContentLoaded", () => {
       spanInsert.className = "sr-only";
       spanInsert.textContent = "Insert";
 
-      // WIP: add fill out click listener
+      buttonInsert.addEventListener("click", () => {
+        this.fillOutJob(work_order);
+      });
 
       const buttonDelete = document.createElement("button");
       buttonDelete.setAttribute("type", "button");
@@ -265,7 +257,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!work_order || typeof work_order !== "object")
         throw new Error("Invalid work order.");
 
-      chrome.storage.local.get("work_orders", (result) => {
+      browser.storage.local.get("work_orders", (result) => {
         const data = result.work_orders || {};
         if (typeof data !== "object") throw new Error("Invalid map data.");
 
@@ -275,10 +267,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
         this.work_orders.delete(work_order.number);
 
-        chrome.storage.local.set(
+        browser.storage.local.set(
           { work_orders: Object.fromEntries(this.work_orders) },
           () => {}
         );
+      });
+    },
+
+    fillOutJob: async function (work_order) {
+      if (typeof work_order !== "object") throw new Error("Invalid work order");
+
+      browser.runtime.sendMessage({
+        type: "FILL_JOB_REQUEST",
+        payload: work_order,
       });
     },
   };
@@ -287,7 +288,7 @@ document.addEventListener("DOMContentLoaded", () => {
     plugin.start();
   });
 
-  chrome.storage.onChanged.addListener((changes, areaName) => {
+  browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local" && !changes.work_orders) return;
 
     const workOrders = document.querySelectorAll("#work-orders > li");
@@ -295,5 +296,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     workOrders.forEach((button) => button.remove());
     plugin.start();
+  });
+
+  browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type === "CRITICAL_ERROR") {
+      plugin.criticalError(msg.payload || "Critical Error found!");
+    }
   });
 });

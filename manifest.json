@@ -7,6 +7,9 @@
   "action": {
     "default_popup": "popup.html"
   },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
@@ -22,6 +25,12 @@
       ],
       "js": ["work_order.js"],
       "css": ["work_order.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://buildertrend.net/app/JobPage/0/*"],
+      "js": ["add_job.js"],
+      "css": ["add_job.css"],
       "run_at": "document_idle"
     }
   ]

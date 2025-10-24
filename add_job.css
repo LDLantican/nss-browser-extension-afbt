@@ -1,0 +1,11 @@
+html:has([data-nss-processing="true"]) {
+  cursor: not-allowed;
+}
+html:has([data-nss-processing="true"]) body {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+body {
+  transition: opacity 500ms ease-in-out;
+}

@@ -1,4 +1,6 @@
 (() => {
+  if (typeof browser === "undefined") globalThis.browser = chrome;
+
   const content = {
     save_button_class: "nss-save-work-order",
     remove_button_class: "nss-remove-work-order",
@@ -71,7 +73,7 @@
       if (!serviceRequestHeader) return;
 
       // check if work order number exist in storage
-      chrome.storage.local.get("work_orders", (result) => {
+      browser.storage.local.get("work_orders", (result) => {
         const data = result.work_orders || {};
         if (typeof data !== "object") throw new Error("Invalid map data.");
 
@@ -184,7 +186,7 @@
     saveWorkOrder: async function (workOrder) {
       if (typeof workOrder !== "object") throw new Error("Invalid work order.");
 
-      chrome.storage.local.get("work_orders", (result) => {
+      browser.storage.local.get("work_orders", (result) => {
         const data = result.work_orders || {};
         if (typeof data !== "object") throw new Error("Invalid map data.");
 
@@ -192,7 +194,7 @@
 
         this.work_orders.set(workOrder.number, workOrder);
 
-        chrome.storage.local.set(
+        browser.storage.local.set(
           { work_orders: Object.fromEntries(this.work_orders) },
           () => {}
         );
@@ -202,7 +204,7 @@
     removeWorkOrder: async function (workOrder) {
       if (typeof workOrder !== "object") throw new Error("Invalid work order.");
 
-      chrome.storage.local.get("work_orders", (result) => {
+      browser.storage.local.get("work_orders", (result) => {
         const data = result.work_orders || {};
         if (typeof data !== "object") throw new Error("Invalid map data.");
 
@@ -212,7 +214,7 @@
 
         this.work_orders.delete(workOrder.number);
 
-        chrome.storage.local.set(
+        browser.storage.local.set(
           { work_orders: Object.fromEntries(this.work_orders) },
           () => {}
         );
@@ -222,7 +224,7 @@
 
   content.init();
 
-  chrome.storage.onChanged.addListener((changes, areaName) => {
+  browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local" && !changes.work_orders) return;
 
     const allButtons = document.querySelectorAll(".nss-button");
