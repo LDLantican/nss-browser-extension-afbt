@@ -15,6 +15,14 @@
       "js": ["work_orders.js"],
       "css": ["work_orders.css"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.appfolio.com/maintenance/service_requests/*/work_orders/*"
+      ],
+      "js": ["work_order.js"],
+      "css": ["work_order.css"],
+      "run_at": "document_idle"
     }
   ]
 }
