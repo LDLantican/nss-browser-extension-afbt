@@ -245,8 +245,10 @@
     },
   };
 
-  content.init();
-  content.observeUrlChange();
+  window.addEventListener("load", () => {
+    content.init();
+    content.observeUrlChange();
+  });
 
   browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local" && !changes.work_orders) return;

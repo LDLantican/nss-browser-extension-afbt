@@ -3,8 +3,12 @@
 
   const content = {
     auth_local_storage_key: "bt-object-previousAuthStoreInfo",
+    pending_simulation: 0,
+    fill_out_observers: new Map(),
 
     init: async function () {
+      this.allowClicks(false);
+
       let error = false;
 
       const rawAuthData = localStorage.getItem(this.auth_local_storage_key);
@@ -43,10 +47,23 @@
       } else {
         browser.runtime.sendMessage({ type: "ADD_JOB_PAGE_READY" });
       }
+
+      this.allowClicks(true);
+    },
+
+    startSimulation: function () {
+      this.pending_simulation++;
+    },
+
+    endSimulation: function () {
+      this.pending_simulation--;
     },
 
     fillOut: async function (work_order) {
       if (typeof work_order !== "object") throw new Error("Invalid work order");
+
+      for (const cleanup of this.fill_out_observers.values()) cleanup();
+      this.fill_out_observers.clear();
 
       this.allowClicks(false);
 
@@ -59,32 +76,149 @@
 
       const jobTitle = workOrderStreet + " (" + workOrderNumber + ")";
       const jobType = "Handyman Services";
+      const jobGroup = "Appfolio";
 
-      // query fields
-      const antCardBody = await this.queryElement(
-        ".ant-card-body:has(.ant-row.BTRow-xs.BTRow-sm)"
-      );
+      // TODO: wait for the first rehydration mutation AND THEN fill out forms
 
-      // TODO: fix bug input field resseting
-      const inputJobTitle = antCardBody.querySelector("#jobInfo\\.jobName");
+      // query job title field
+      const inputJobTitleIdSelector = "#jobInfo\\.jobName";
+      const inputJobTitle = await this.queryElement(inputJobTitleIdSelector);
       if (!inputJobTitle) {
         this.sendCriticalErrorMessage("Unable to find Job Title field.");
-        return;
-      } else {
-        this.simulateInputTyping(inputJobTitle, jobTitle);
-        this.observeValueReset(inputJobTitle, () => {
-          this.simulateInputTyping(inputJobTitle, jobTitle);
-        });
+        this.allowClicks(true);
+        return false;
       }
+      inputJobTitle.blur();
 
-      const inputJobType = antCardBody.querySelector(
-        "#jobInfo\\.groupedProjectType"
-      );
+      const setupJobTitleObserver = async () => {
+        const inputJobTitle = await this.queryElement(inputJobTitleIdSelector);
+        if (!inputJobTitle) return;
+
+        if (inputJobTitle.value !== jobTitle) {
+          this.startSimulation();
+          try {
+            this.simulateInputTyping(inputJobTitle, jobTitle);
+          } finally {
+            this.endSimulation();
+          }
+        }
+
+        const cleanupJobTitle = this.observeMutation(
+          inputJobTitle,
+          async () => {
+            await setupJobTitleObserver();
+          }
+        );
+
+        this.fill_out_observers.set("job_title", cleanupJobTitle);
+      };
+      await setupJobTitleObserver();
+
+      // query job type field
+      const inputJobTypeIdSelector = "#jobInfo\\.groupedProjectType";
+      const inputJobType = await this.queryElement(inputJobTypeIdSelector);
       if (!inputJobType) {
         this.sendCriticalErrorMessage("Unable to find Job Type field.");
-        return;
-      } else {
-        this.simulateInputTyping(inputJobType, jobType);
+        this.allowClicks(true);
+        return false;
+      }
+      inputJobType.blur();
+
+      const setupJobTypeObserver = async () => {
+        const inputJobType = await this.queryElement(inputJobTypeIdSelector);
+        if (!inputJobType) return;
+
+        const labelSpanJobType = await this.queryElement(
+          ".ant-select-selector:has(" + inputJobTypeIdSelector + ")"
+        );
+
+        if (inputJobType.value !== jobType) {
+          this.startSimulation();
+          try {
+            this.simulateInputTyping(inputJobType, jobType);
+
+            const jobTypeOption = await this.queryElement(
+              "[data-searchvalue='Handyman Services']"
+            );
+            if (!jobTypeOption) {
+              await this.sendCriticalErrorMessage("Unale to find option.");
+              return;
+            }
+
+            this.simulateClick(jobTypeOption);
+          } finally {
+            this.endSimulation();
+          }
+        }
+
+        const cleanupJobType = this.observeMutation(
+          [inputJobType, labelSpanJobType],
+          async () => {
+            await setupJobTypeObserver();
+          }
+        );
+
+        this.fill_out_observers.set("job_type", cleanupJobType);
+      };
+      await setupJobTypeObserver();
+
+      // query job group
+      const inputJobGroupSelector =
+        "[data-testid='jobGroup']:has(#jobInfo\\.jobGroups) .ant-select-selector";
+      const inputJobGroup = await this.queryElement(inputJobGroupSelector);
+      if (!inputJobGroup) {
+        this.sendCriticalErrorMessage("Unable to find Job Group field.");
+        this.allowClicks(true);
+        return false;
+      }
+      inputJobGroup.blur();
+
+      const setupJobGroupObserver = async () => {
+        const inputJobGroup = await this.queryElement(inputJobGroupSelector);
+        if (!inputJobGroup) return;
+
+        const checkboxJobGroup = await this.queryElement(
+          ".ant-select-tree-checkbox-checked:has([title='Appfolio'])",
+          5000
+        );
+        console.log(checkboxJobGroup);
+        if (!checkboxJobGroup) {
+          this.startSimulation();
+          try {
+            this.simulateInputTyping(inputJobGroup, jobGroup);
+
+            const jobGroupOption = await this.queryElement(
+              "[data-testid='jobGroup-popup'] .ant-select-tree-list-holder-inner .ant-select-tree-treenode [title='Appfolio']"
+            );
+            if (!jobGroupOption) {
+              await this.sendCriticalErrorMessage("Unable to find option.");
+              return;
+            }
+
+            this.simulateClick(jobGroupOption);
+          } finally {
+            this.endSimulation();
+          }
+        }
+
+        const labelSpanJobGroup = await this.queryElement(
+          ".ant-select-show-search[data-testid='jobGroup'] .ant-select-selection-overflow"
+        );
+
+        const cleanupJobGroup = this.observeMutation(
+          [inputJobGroup, checkboxJobGroup, labelSpanJobGroup],
+          async () => {
+            await setupJobGroupObserver();
+          }
+        );
+
+        this.fill_out_observers.set("job_group", cleanupJobGroup);
+      };
+      await setupJobGroupObserver();
+
+      // wait for pending simulations
+      while (this.pending_simulation > 0) {
+        await new Promise((r) => setTimeout(r, 50));
       }
 
       this.allowClicks(true);
@@ -153,115 +287,132 @@
       if (!(input instanceof Element)) throw new Error("Invalid input.");
       if (typeof string !== "string") throw new Error("Invalid string.");
 
-      // input.focus();
+      this.simulateClick(input);
+      for (const char of string) {
+        const keydownEvent = new KeyboardEvent("keydown", {
+          key: char,
+          bubbles: true,
+        });
+        const inputEvent = new Event("input", { bubbles: true });
+        const keyupEvent = new KeyboardEvent("keyup", {
+          key: char,
+          bubbles: true,
+        });
 
-      // for (const char of string) {
-      //   input.dispatchEvent(
-      //     new KeyboardEvent("keydown", { key: char, bubbles: true })
-      //   );
-      //   input.value += char;
-      //   input.dispatchEvent(new Event("input", { bubbles: true }));
-      //   input.dispatchEvent(
-      //     new KeyboardEvent("keyup", { key: char, bubbles: true })
-      //   );
-      // }
+        keydownEvent.synthetic = true;
+        inputEvent.synthetic = true;
+        keyupEvent.synthetic = true;
 
-      // input.blur();
-
-      // const descriptor = Object.getOwnPropertyDescriptor(
-      //   Object.getPrototypeOf(input),
-      //   "value"
-      // );
-      // setter.call(input, string);
-
-      // input.dispatchEvent(new Event("input", { bubbles: true }));
-      // input.dispatchEvent(new Event("change", { bubbles: true }));
-
-      // determine which prototype defines the native "value" property
-      let proto = Object.getPrototypeOf(input);
-      if (!proto || !Object.getOwnPropertyDescriptor(proto, "value")) {
-        // fallback for <textarea> and <select>
-        if (input instanceof HTMLTextAreaElement) {
-          proto = HTMLTextAreaElement.prototype;
-        } else if (input instanceof HTMLSelectElement) {
-          proto = HTMLSelectElement.prototype;
-        } else {
-          proto = HTMLInputElement.prototype;
-        }
+        input.dispatchEvent(keydownEvent);
+        input.value += char;
+        input.dispatchEvent(inputEvent);
+        input.dispatchEvent(keyupEvent);
       }
-
-      const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
-
-      // safely set the value
-      if (descriptor && typeof descriptor.set === "function") {
-        descriptor.set.call(input, string);
-      } else {
-        // fallback for elements without a standard value setter
-        input.value = string;
-      }
-
-      // dispatch the appropriate events so frameworks like React, Vue, Angular, etc. update
-      const inputEvent = new Event("input", {
-        bubbles: true,
-        cancelable: true,
-      });
-      const changeEvent = new Event("change", {
-        bubbles: true,
-        cancelable: true,
-      });
-
-      inputEvent.synthetic = true;
-      changeEvent.synthetic = true;
-
-      input.dispatchEvent(inputEvent);
-      input.dispatchEvent(changeEvent);
-
-      // optional - handle <select> specifically (React often uses 'change' only)
-      if (input instanceof HTMLSelectElement) {
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-      }
+      this.simulateClick(document.body);
     },
 
-    observeValueReset: function (input, callback) {
-      if (!(input instanceof Element)) throw new Error("Invalid input.");
-      if (typeof callback !== "function") throw new Error("Invalid callback.");
+    simulateClick: function (element) {
+      if (!(element instanceof Element)) throw new Error("Invalid element.");
 
-      let lastValue = input.value;
-      let userHasEdited = false;
-
-      const markUserEdit = (e) => {
-        if (e.isTrusted || !e.synthetic) userHasEdited = true;
-      };
-
-      input.addEventListener("input", markUserEdit);
-      input.addEventListener("keydown", markUserEdit);
-      input.addEventListener("mousedown", markUserEdit);
-      input.addEventListener("focus", markUserEdit);
-
-      const observer = new MutationObserver(() => {
-        if (input.value === lastValue) return;
-
-        lastValue = input.value;
-        if (input.value === "" && !userHasEdited) callback();
+      const mousedownEvent = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+      });
+      const mouseupEvent = new MouseEvent("mouseup", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+      });
+      const clickEvent = new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
       });
 
-      observer.observe(input, { attributes: true, attributeFilter: ["value"] });
+      mousedownEvent.synthetic = true;
+      mouseupEvent.synthetic = true;
+      clickEvent.synthetic = true;
 
-      const interval = setInterval(() => {
-        if (input.value === lastValue) return;
+      element.dispatchEvent(mousedownEvent);
+      element.dispatchEvent(mouseupEvent);
+      element.dispatchEvent(clickEvent);
+    },
 
-        lastValue = input.value;
-        if (input.value === "" && !userHasEdited) callback();
-      }, 500);
+    observeMutation: function (elements, callback) {
+      if (elements instanceof Element) elements = [elements];
+      else if (
+        !(Array.isArray(elements) || NodeList.prototype.isPrototypeOf(elements))
+      )
+        throw new Error(
+          "Invalid element(s). Must be Element or array/NodeList of Elements."
+        );
 
-      return () => {
-        observer.disconnect();
-        clearInterval(interval);
-        input.removeEventListener("input", markUserEdit);
-        input.removeEventListener("keydown", markUserEdit);
-        input.removeEventListener("mousedown", markUserEdit);
-        input.removeEventListener("focus", markUserEdit);
-      };
+      if (typeof callback !== "function") throw new Error("Invalid callback.");
+
+      const disconnectors = [];
+
+      for (const element of elements) {
+        const isFormField = element != null && "value" in element;
+
+        // Create a snapshot of what we care about
+        const getSnapshot = () => {
+          const attrString = element
+            ? Array.from(element.attributes)
+                .map((a) => `${a.name}=${a.value}`)
+                .join("|")
+            : "";
+          const content = isFormField
+            ? element?.value || ""
+            : element?.textContent || "";
+          return attrString + "||" + content;
+        };
+
+        let lastSnapshot = getSnapshot();
+        let userHasEdited = false;
+
+        const markUserEdit = (e) => {
+          if (e.isTrusted || !e.synthetic) userHasEdited = true;
+        };
+
+        const editEvents = [
+          "input",
+          "change",
+          "keydown",
+          "keyup",
+          "mousedown",
+          "mouseup",
+          "focus",
+          "click",
+          "blur",
+        ];
+        for (const type of editEvents)
+          if (element) element.addEventListener(type, markUserEdit);
+
+        const observer = new MutationObserver(async () => {
+          const snapshot = getSnapshot();
+          if (snapshot === lastSnapshot) return; // ignore redundant calls
+
+          lastSnapshot = snapshot;
+          await callback(element);
+        });
+
+        if (element)
+          observer.observe(element, {
+            attributes: true,
+            childList: true,
+            characterData: true,
+            subtree: true,
+          });
+
+        disconnectors.push(() => {
+          observer.disconnect();
+          for (const type of editEvents)
+            if (element) element.removeEventListener(type, markUserEdit);
+        });
+      }
+
+      return () => disconnectors.forEach((fn) => fn());
     },
 
     sendCriticalErrorMessage: async function (string) {
@@ -280,5 +431,7 @@
     content.fillOut(message.payload || {});
   });
 
-  content.init();
+  window.addEventListener("load", () => {
+    content.init();
+  });
 })();

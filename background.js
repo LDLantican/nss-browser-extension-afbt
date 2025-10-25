@@ -15,20 +15,26 @@
         currentWindow: true,
       });
 
-      const handshakePromise = new Promise((resolve) => {
-        const listener = (msg, sndr) => {
-          if (msg.type === "ADD_JOB_PAGE_READY") {
-            browser.runtime.onMessage.removeListener(listener);
-            resolve(sndr.tab?.id);
-          }
-        };
-        browser.runtime.onMessage.addListener(listener);
-      });
+      let readyTabId = tab.id;
+      const isOnTargetPage = tab.url?.startsWith(addNewJobUrl);
 
-      await browser.tabs.update(tab.id, { url: addNewJobUrl });
-      await this.waitOnTabLoad(tab.id);
+      if (!isOnTargetPage) {
+        const handshakePromise = new Promise((resolve) => {
+          const listener = (msg, sndr) => {
+            if (msg.type === "ADD_JOB_PAGE_READY") {
+              browser.runtime.onMessage.removeListener(listener);
+              resolve(sndr.tab?.id);
+            }
+          };
+          browser.runtime.onMessage.addListener(listener);
+        });
 
-      const readyTabId = await handshakePromise;
+        await browser.tabs.update(tab.id, { url: addNewJobUrl });
+        await this.waitOnTabLoad(tab.id);
+
+        readyTabId = await handshakePromise;
+      }
+
       browser.tabs.sendMessage(readyTabId, {
         type: "FILL_OUT_JOB",
         payload: work_order,
