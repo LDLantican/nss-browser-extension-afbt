@@ -72,6 +72,9 @@
         return;
       } else {
         this.simulateInputTyping(inputJobTitle, jobTitle);
+        this.observeValueReset(inputJobTitle, () => {
+          this.simulateInputTyping(inputJobTitle, jobTitle);
+        });
       }
 
       const inputJobType = antCardBody.querySelector(
@@ -82,9 +85,6 @@
         return;
       } else {
         this.simulateInputTyping(inputJobType, jobType);
-        inputJobType.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Tab", bubbles: true })
-        );
       }
 
       this.allowClicks(true);
@@ -150,23 +150,118 @@
     },
 
     simulateInputTyping: function (input, string) {
-      if (!input instanceof Element) throw new Error("Invalid input.");
+      if (!(input instanceof Element)) throw new Error("Invalid input.");
       if (typeof string !== "string") throw new Error("Invalid string.");
 
-      input.focus();
+      // input.focus();
 
-      for (const char of string) {
-        input.dispatchEvent(
-          new KeyboardEvent("keydown", { key: char, bubbles: true })
-        );
-        input.value += char;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(
-          new KeyboardEvent("keyup", { key: char, bubbles: true })
-        );
+      // for (const char of string) {
+      //   input.dispatchEvent(
+      //     new KeyboardEvent("keydown", { key: char, bubbles: true })
+      //   );
+      //   input.value += char;
+      //   input.dispatchEvent(new Event("input", { bubbles: true }));
+      //   input.dispatchEvent(
+      //     new KeyboardEvent("keyup", { key: char, bubbles: true })
+      //   );
+      // }
+
+      // input.blur();
+
+      // const descriptor = Object.getOwnPropertyDescriptor(
+      //   Object.getPrototypeOf(input),
+      //   "value"
+      // );
+      // setter.call(input, string);
+
+      // input.dispatchEvent(new Event("input", { bubbles: true }));
+      // input.dispatchEvent(new Event("change", { bubbles: true }));
+
+      // determine which prototype defines the native "value" property
+      let proto = Object.getPrototypeOf(input);
+      if (!proto || !Object.getOwnPropertyDescriptor(proto, "value")) {
+        // fallback for <textarea> and <select>
+        if (input instanceof HTMLTextAreaElement) {
+          proto = HTMLTextAreaElement.prototype;
+        } else if (input instanceof HTMLSelectElement) {
+          proto = HTMLSelectElement.prototype;
+        } else {
+          proto = HTMLInputElement.prototype;
+        }
       }
 
-      input.blur();
+      const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+
+      // safely set the value
+      if (descriptor && typeof descriptor.set === "function") {
+        descriptor.set.call(input, string);
+      } else {
+        // fallback for elements without a standard value setter
+        input.value = string;
+      }
+
+      // dispatch the appropriate events so frameworks like React, Vue, Angular, etc. update
+      const inputEvent = new Event("input", {
+        bubbles: true,
+        cancelable: true,
+      });
+      const changeEvent = new Event("change", {
+        bubbles: true,
+        cancelable: true,
+      });
+
+      inputEvent.synthetic = true;
+      changeEvent.synthetic = true;
+
+      input.dispatchEvent(inputEvent);
+      input.dispatchEvent(changeEvent);
+
+      // optional - handle <select> specifically (React often uses 'change' only)
+      if (input instanceof HTMLSelectElement) {
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    },
+
+    observeValueReset: function (input, callback) {
+      if (!(input instanceof Element)) throw new Error("Invalid input.");
+      if (typeof callback !== "function") throw new Error("Invalid callback.");
+
+      let lastValue = input.value;
+      let userHasEdited = false;
+
+      const markUserEdit = (e) => {
+        if (e.isTrusted || !e.synthetic) userHasEdited = true;
+      };
+
+      input.addEventListener("input", markUserEdit);
+      input.addEventListener("keydown", markUserEdit);
+      input.addEventListener("mousedown", markUserEdit);
+      input.addEventListener("focus", markUserEdit);
+
+      const observer = new MutationObserver(() => {
+        if (input.value === lastValue) return;
+
+        lastValue = input.value;
+        if (input.value === "" && !userHasEdited) callback();
+      });
+
+      observer.observe(input, { attributes: true, attributeFilter: ["value"] });
+
+      const interval = setInterval(() => {
+        if (input.value === lastValue) return;
+
+        lastValue = input.value;
+        if (input.value === "" && !userHasEdited) callback();
+      }, 500);
+
+      return () => {
+        observer.disconnect();
+        clearInterval(interval);
+        input.removeEventListener("input", markUserEdit);
+        input.removeEventListener("keydown", markUserEdit);
+        input.removeEventListener("mousedown", markUserEdit);
+        input.removeEventListener("focus", markUserEdit);
+      };
     },
 
     sendCriticalErrorMessage: async function (string) {
