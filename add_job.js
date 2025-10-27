@@ -59,10 +59,11 @@
       const workOrderCity = work_order.city || "";
       const workOrderState = work_order.state || "";
       // const workOrderZip = work_order.zip || "";
-      const workOrderZip = "1234";
+      // const workOrderZip = "1234"; // FOR TESTING
+      const workOrderZip = ""; // FOR TESTING
 
       // const jobTitle = workOrderStreet + " (" + workOrderNumber + ")";
-      const jobTitle = "2737 a test";
+      // const jobTitle = "2737 a test"; // FOR TESTING
       const jobType = "Handyman Services";
       const jobGroup = "Appfolio";
       const jobClient = "Camelot Properties";
@@ -269,22 +270,30 @@
       await new Promise((resolve) => setTimeout(resolve, 1000));
       this.simulateClick(saveButton);
 
-      // check for errors
-      const errors = await this.queryElement(
-        "[data-testid='requiredCorrections']"
-      );
-      if (errors) {
-        this.sendCriticalErrorMessage("Unable to save job.");
-        this.allowClicks(true);
-        return false;
+      // check for success
+
+      const success = await this.queryElement(".ant-message-success");
+      if (success && success.textContent === "Job saved successfully") {
+        await browser.runtime.sendMessage({
+          type: "FILL_JOB_COMPLETE",
+          payload: work_order,
+        });
+
+        this.sendFlashMessage(
+          "alert",
+          `${workOrderNumber} successfully added.`
+        );
+      } else {
+        // check for errors
+        const errors = await this.queryElement(
+          "[data-testid='requiredCorrections']"
+        );
+        if (errors) {
+          this.sendCriticalErrorMessage("Unable to save job.");
+          this.allowClicks(true);
+          return false;
+        }
       }
-
-      await browser.runtime.sendMessage({
-        type: "FILL_JOB_COMPLETE",
-        payload: work_order,
-      });
-
-      this.sendFlashMessage("alert", `${workOrderNumber} successfully added.`);
 
       this.current_fill_request = null;
       this.allowClicks(true);
