@@ -3,6 +3,7 @@
 
   const content = {
     auth_local_storage_key: "bt-object-previousAuthStoreInfo",
+    current_fill_request: null,
 
     init: async function () {
       this.allowClicks(false);
@@ -196,7 +197,7 @@
       this.simulateInputTyping(inputJobZip, workOrderZip);
       this.simulateClick(document.body);
 
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // FOR TEST PURPOSE ONLY
       const buttonCancelLink = await this.queryElement(
@@ -265,7 +266,7 @@
         return false;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       this.simulateClick(saveButton);
 
       // check for errors
@@ -278,6 +279,14 @@
         return false;
       }
 
+      await browser.runtime.sendMessage({
+        type: "FILL_JOB_COMPLETE",
+        payload: work_order,
+      });
+
+      this.sendFlashMessage("alert", `${workOrderNumber} successfully added.`);
+
+      this.current_fill_request = null;
       this.allowClicks(true);
     },
 
@@ -442,12 +451,43 @@
         payload: string,
       });
     },
+
+    sendFlashMessage: async function (type, string) {
+      if (typeof type !== "string") throw new Error("Invalid flash type.");
+      if (typeof string !== "string") throw new Error("Invalid string.");
+
+      switch (type) {
+        case "alert":
+          browser.runtime.sendMessage({
+            type: "FLASH_ALERT",
+            payload: string,
+          });
+          break;
+
+        case "error":
+          browser.runtime.sendMessage({
+            type: "FLASH_ERROR",
+            payload: string,
+          });
+          break;
+      }
+    },
   };
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type !== "FILL_OUT_JOB") return;
+    if (message.type === "FILL_OUT_JOB") {
+      if (content.current_fill_request) {
+        content.sendCriticalErrorMessage(
+          "There is an existing process request. Please wait until it's done."
+        );
+        return;
+      }
+      const workOrder = message.payload || {};
+      if (!workOrder || !workOrder?.number) return;
 
-    content.fillOut(message.payload || {});
+      content.current_fill_request = workOrder;
+      content.fillOut(workOrder);
+    }
   });
 
   window.addEventListener("load", () => {

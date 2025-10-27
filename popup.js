@@ -20,6 +20,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const workOrdersList = document.querySelector("#work-orders");
         if (!workOrdersList) throw new Error("Work Order list not found.");
 
+        const counter = document.querySelector("#total-count .value");
+
         if (this.work_orders.size > 0) {
           this.work_orders.forEach((work_order) => {
             this.showWorkOrder(workOrdersList, work_order);
@@ -35,12 +37,16 @@ document.addEventListener("DOMContentLoaded", () => {
           });
 
           clearButton.setAttribute("data-hidden", false);
+
+          if (counter) counter.textContent = this.work_orders.size;
         } else {
           const p = document.createElement("p");
           p.textContent = "You currently have no work orders saved.";
           workOrdersList.appendChild(p);
 
           clearButton.setAttribute("data-hidden", true);
+
+          if (counter) counter.textContent = 0;
         }
 
         this.load(false);
@@ -117,15 +123,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
       this.error(msg, { persist: true });
       this.terminate();
-    },
-
-    getActiveTabURL: async function () {
-      const [tab] = await browser.tabs.query({
-        currentWindow: true,
-        active: true,
-      });
-
-      return tab;
     },
 
     showWorkOrder: function (listElement, work_order) {
@@ -294,13 +291,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const workOrders = document.querySelectorAll("#work-orders > li");
     if (!workOrders) return;
 
-    workOrders.forEach((button) => button.remove());
+    workOrders.forEach((order) => order.remove());
     plugin.start();
   });
 
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "CRITICAL_ERROR") {
       plugin.criticalError(msg.payload || "Critical Error found!");
+    }
+
+    if (msg.type === "FLASH_ALERT") {
+      plugin.alert(msg.payload);
+    }
+
+    if (msg.type === "FLASH_ERROR") {
+      plugin.error(msg.payload);
     }
   });
 });

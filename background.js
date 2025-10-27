@@ -2,6 +2,8 @@
   if (typeof browser === "undefined") globalThis.browser = chrome;
 
   const background = {
+    work_orders: new Map(),
+
     fillJob: async function (message, sender) {
       const work_order = message.payload || null;
       if (typeof work_order !== "object")
@@ -52,11 +54,37 @@
         browser.tabs.onUpdated.addListener(listener);
       });
     },
+
+    removeWorkOrder: async function (work_order) {
+      if (!work_order || typeof work_order !== "object")
+        throw new Error("Invalid work order.");
+
+      browser.storage.local.get("work_orders", (result) => {
+        const data = result.work_orders || {};
+        if (typeof data !== "object") throw new Error("Invalid map data.");
+
+        this.work_orders = new Map(Object.entries(data));
+
+        if (!this.work_orders.has(work_order.number || "")) return;
+
+        this.work_orders.delete(work_order.number);
+
+        browser.storage.local.set(
+          { work_orders: Object.fromEntries(this.work_orders) },
+          () => {}
+        );
+      });
+    },
   };
 
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "FILL_JOB_REQUEST") {
       background.fillJob(msg, sender);
+    }
+
+    if (msg.type === "FILL_JOB_COMPLETE") {
+      const workOrder = msg.payload || {};
+      background.removeWorkOrder(workOrder);
     }
   });
 })();
