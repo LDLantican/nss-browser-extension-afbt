@@ -58,11 +58,11 @@
       const workOrderStreet = work_order.street || "";
       const workOrderCity = work_order.city || "";
       const workOrderState = work_order.state || "";
-      // const workOrderZip = work_order.zip || "";
+      const workOrderZip = work_order.zip || "";
       // const workOrderZip = "1234"; // FOR TESTING
-      const workOrderZip = ""; // FOR TESTING
+      // const workOrderZip = ""; // FOR TESTING
 
-      // const jobTitle = workOrderStreet + " (" + workOrderNumber + ")";
+      const jobTitle = workOrderStreet + " (" + workOrderNumber + ")";
       // const jobTitle = "2737 a test"; // FOR TESTING
       const jobType = "Handyman Services";
       const jobGroup = "Appfolio";
@@ -156,41 +156,41 @@
 
       // job group
 
-      // let appfolioTagged = false;
-      // const groupSelected = document.querySelectorAll(
-      //   "[data-testid='jobGroup'] .ant-select-selection-overflow-item"
-      // );
-      // for (const group of groupSelected) {
-      //   if (group.textContent === jobGroup) appfolioTagged = true;
-      //   break;
-      // }
+      let appfolioTagged = false;
+      const groupSelected = document.querySelectorAll(
+        "[data-testid='jobGroup'] .ant-select-selection-overflow-item"
+      );
+      for (const group of groupSelected) {
+        if (group.textContent === jobGroup) appfolioTagged = true;
+        break;
+      }
 
-      // if (!appfolioTagged) {
-      //   this.simulateClick(inputJobGroup);
-      //   const jobGroupOption = await this.queryElement(
-      //     `[data-testid='jobGroup-popup'] .ant-select-tree-list-holder-inner .ant-select-tree-treenode [title='${jobGroup}']`
-      //   );
-      //   this.simulateClick(jobGroupOption);
-      //   this.simulateClick(document.body);
-      // }
+      if (!appfolioTagged) {
+        this.simulateClick(inputJobGroup);
+        const jobGroupOption = await this.queryElement(
+          `[data-testid='jobGroup-popup'] .ant-select-tree-list-holder-inner .ant-select-tree-treenode [title='${jobGroup}']`
+        );
+        this.simulateClick(jobGroupOption);
+        this.simulateClick(document.body);
+      }
 
       // job street
-      // this.simulateClick(inputJobStreet);
-      // this.simulateInputBackspace(inputJobStreet, inputJobStreet.value);
-      // this.simulateInputTyping(inputJobStreet, workOrderStreet);
-      // this.simulateClick(document.body);
+      this.simulateClick(inputJobStreet);
+      this.simulateInputBackspace(inputJobStreet, inputJobStreet.value);
+      this.simulateInputTyping(inputJobStreet, workOrderStreet);
+      this.simulateClick(document.body);
 
       // job city
-      // this.simulateClick(inputJobCity);
-      // this.simulateInputBackspace(inputJobCity, inputJobCity.value);
-      // this.simulateInputTyping(inputJobCity, workOrderCity);
-      // this.simulateClick(document.body);
+      this.simulateClick(inputJobCity);
+      this.simulateInputBackspace(inputJobCity, inputJobCity.value);
+      this.simulateInputTyping(inputJobCity, workOrderCity);
+      this.simulateClick(document.body);
 
       // job state
-      // this.simulateClick(inputJobState);
-      // this.simulateInputBackspace(inputJobState, inputJobState.value);
-      // this.simulateInputTyping(inputJobState, workOrderState);
-      // this.simulateClick(document.body);
+      this.simulateClick(inputJobState);
+      this.simulateInputBackspace(inputJobState, inputJobState.value);
+      this.simulateInputTyping(inputJobState, workOrderState);
+      this.simulateClick(document.body);
 
       // job zip
       this.simulateClick(inputJobZip);
@@ -201,62 +201,62 @@
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // FOR TEST PURPOSE ONLY
-      const buttonCancelLink = await this.queryElement(
-        "button[data-testid='cancelLinking']"
-      );
-      this.simulateClick(buttonCancelLink);
+      // const buttonCancelLink = await this.queryElement(
+      //   "button[data-testid='cancelLinking']"
+      // );
+      // this.simulateClick(buttonCancelLink);
 
       // next page
 
       // client page
-      // const clientPageButton = await this.queryElement(
-      //   "button[data-testid='clientsTab']"
-      // );
-      // if (!clientPageButton) {
-      //   this.sendCriticalErrorMessage("Unable to find client tab.");
-      //   this.allowClicks(true);
-      //   return false;
-      // }
-      // this.simulateClick(clientPageButton);
+      const clientPageButton = await this.queryElement(
+        "button[data-testid='clientsTab']"
+      );
+      if (!clientPageButton) {
+        this.sendCriticalErrorMessage("Unable to find client tab.");
+        this.allowClicks(true);
+        return false;
+      }
+      this.simulateClick(clientPageButton);
 
       // add existing client
-      // const existingContactAnchor = await this.queryElement(
-      //   "[data-testid='choose-existing-contact']"
-      // );
-      // if (!existingContactAnchor) {
-      //   this.sendCriticalErrorMessage("Unable to add existing client.");
-      //   this.allowClicks(true);
-      //   return false;
-      // }
-      // this.simulateClick(existingContactAnchor);
+      const existingContactAnchor = await this.queryElement(
+        "[data-testid='choose-existing-contact']"
+      );
+      if (!existingContactAnchor) {
+        this.sendCriticalErrorMessage("Unable to add existing client.");
+        this.allowClicks(true);
+        return false;
+      }
+      this.simulateClick(existingContactAnchor);
 
       // search client name
-      // const inputNameSearchSelector = "[data-testid='nameSearch']";
-      // const inputNameSearch = await this.queryElement(inputNameSearchSelector);
-      // const buttonNameSearch = await this.queryElement(
-      //   inputNameSearchSelector +
-      //     " + span.ant-input-group-addon button.ant-input-search-button"
-      // );
-      // if (!inputNameSearch || !buttonNameSearch) {
-      //   this.sendCriticalErrorMessage("Unable to search existing client.");
-      //   this.allowClicks(true);
-      //   return false;
-      // }
-      // this.simulateClick(inputNameSearch);
-      // this.simulateInputBackspace(inputNameSearch, inputNameSearch.value);
-      // this.simulateInputTyping(inputNameSearch, jobClient);
-      // this.simulateClick(buttonNameSearch);
+      const inputNameSearchSelector = "[data-testid='nameSearch']";
+      const inputNameSearch = await this.queryElement(inputNameSearchSelector);
+      const buttonNameSearch = await this.queryElement(
+        inputNameSearchSelector +
+          " + span.ant-input-group-addon button.ant-input-search-button"
+      );
+      if (!inputNameSearch || !buttonNameSearch) {
+        this.sendCriticalErrorMessage("Unable to search existing client.");
+        this.allowClicks(true);
+        return false;
+      }
+      this.simulateClick(inputNameSearch);
+      this.simulateInputBackspace(inputNameSearch, inputNameSearch.value);
+      this.simulateInputTyping(inputNameSearch, jobClient);
+      this.simulateClick(buttonNameSearch);
 
-      // // select client
-      // const buttonJobClient = await this.queryElement(
-      //   ".ContactSearch-Table tr[data-row-key='39778241'] button[data-testid='select']"
-      // );
-      // if (!buttonJobClient) {
-      //   this.sendCriticalErrorMessage("Unable to select existing client.");
-      //   this.allowClicks(true);
-      //   return false;
-      // }
-      // this.simulateClick(buttonJobClient);
+      // select client
+      const buttonJobClient = await this.queryElement(
+        ".ContactSearch-Table tr[data-row-key='39778241'] button[data-testid='select']"
+      );
+      if (!buttonJobClient) {
+        this.sendCriticalErrorMessage("Unable to select existing client.");
+        this.allowClicks(true);
+        return false;
+      }
+      this.simulateClick(buttonJobClient);
 
       const saveButton = await this.queryElement(
         "button#save[data-testid='save']"
