@@ -3,8 +3,6 @@
 
   const content = {
     auth_local_storage_key: "bt-object-previousAuthStoreInfo",
-    pending_simulation: 0,
-    fill_out_observers: new Map(),
 
     init: async function () {
       this.allowClicks(false);
@@ -51,36 +49,35 @@
       this.allowClicks(true);
     },
 
-    startSimulation: function () {
-      this.pending_simulation++;
-    },
-
-    endSimulation: function () {
-      this.pending_simulation--;
-    },
-
     fillOut: async function (work_order) {
       if (typeof work_order !== "object") throw new Error("Invalid work order");
-
-      for (const cleanup of this.fill_out_observers.values()) cleanup();
-      this.fill_out_observers.clear();
-
-      this.allowClicks(false);
 
       const workOrderNumber = work_order.number || "";
       const workOrderDescription = work_order.description || "";
       const workOrderStreet = work_order.street || "";
       const workOrderCity = work_order.city || "";
       const workOrderState = work_order.state || "";
-      const workOrderZip = work_order.zip || "";
+      // const workOrderZip = work_order.zip || "";
+      const workOrderZip = "1234";
 
-      const jobTitle = workOrderStreet + " (" + workOrderNumber + ")";
+      // const jobTitle = workOrderStreet + " (" + workOrderNumber + ")";
+      const jobTitle = "2737 a test";
       const jobType = "Handyman Services";
       const jobGroup = "Appfolio";
+      const jobClient = "Camelot Properties";
 
-      // TODO: wait for the first rehydration mutation AND THEN fill out forms
+      this.allowClicks(false);
 
-      // query job title field
+      const quickBookWidget = await this.queryElement(
+        "[data-testid='accountingLinkingCard'] img.quickbooks-logo"
+      );
+
+      if (!quickBookWidget) {
+        this.sendCriticalErrorMessage("Unable to find accounting link.");
+        this.allowClicks(true);
+        return false;
+      }
+
       const inputJobTitleIdSelector = "#jobInfo\\.jobName";
       const inputJobTitle = await this.queryElement(inputJobTitleIdSelector);
       if (!inputJobTitle) {
@@ -88,81 +85,16 @@
         this.allowClicks(true);
         return false;
       }
-      inputJobTitle.blur();
 
-      const setupJobTitleObserver = async () => {
-        const inputJobTitle = await this.queryElement(inputJobTitleIdSelector);
-        if (!inputJobTitle) return;
-
-        if (inputJobTitle.value !== jobTitle) {
-          this.startSimulation();
-          try {
-            this.simulateInputTyping(inputJobTitle, jobTitle);
-          } finally {
-            this.endSimulation();
-          }
-        }
-
-        const cleanupJobTitle = this.observeMutation(
-          inputJobTitle,
-          async () => {
-            await setupJobTitleObserver();
-          }
-        );
-
-        this.fill_out_observers.set("job_title", cleanupJobTitle);
-      };
-      await setupJobTitleObserver();
-
-      // query job type field
-      const inputJobTypeIdSelector = "#jobInfo\\.groupedProjectType";
+      const inputJobTypeIdSelector =
+        ".ant-select-selector:has(#jobInfo\\.groupedProjectType)";
       const inputJobType = await this.queryElement(inputJobTypeIdSelector);
       if (!inputJobType) {
         this.sendCriticalErrorMessage("Unable to find Job Type field.");
         this.allowClicks(true);
         return false;
       }
-      inputJobType.blur();
 
-      const setupJobTypeObserver = async () => {
-        const inputJobType = await this.queryElement(inputJobTypeIdSelector);
-        if (!inputJobType) return;
-
-        const labelSpanJobType = await this.queryElement(
-          ".ant-select-selector:has(" + inputJobTypeIdSelector + ")"
-        );
-
-        if (inputJobType.value !== jobType) {
-          this.startSimulation();
-          try {
-            this.simulateInputTyping(inputJobType, jobType);
-
-            const jobTypeOption = await this.queryElement(
-              "[data-searchvalue='Handyman Services']"
-            );
-            if (!jobTypeOption) {
-              await this.sendCriticalErrorMessage("Unale to find option.");
-              return;
-            }
-
-            this.simulateClick(jobTypeOption);
-          } finally {
-            this.endSimulation();
-          }
-        }
-
-        const cleanupJobType = this.observeMutation(
-          [inputJobType, labelSpanJobType],
-          async () => {
-            await setupJobTypeObserver();
-          }
-        );
-
-        this.fill_out_observers.set("job_type", cleanupJobType);
-      };
-      await setupJobTypeObserver();
-
-      // query job group
       const inputJobGroupSelector =
         "[data-testid='jobGroup']:has(#jobInfo\\.jobGroups) .ant-select-selector";
       const inputJobGroup = await this.queryElement(inputJobGroupSelector);
@@ -171,54 +103,179 @@
         this.allowClicks(true);
         return false;
       }
-      inputJobGroup.blur();
 
-      const setupJobGroupObserver = async () => {
-        const inputJobGroup = await this.queryElement(inputJobGroupSelector);
-        if (!inputJobGroup) return;
+      const inputJobStreetSelector = "#jobInfo\\.address\\.street";
+      const inputJobStreet = await this.queryElement(inputJobStreetSelector);
+      if (!inputJobStreet) {
+        this.sendCriticalErrorMessage("Unable to find Street field.");
+        this.allowClicks(true);
+        return false;
+      }
 
-        const checkboxJobGroup = await this.queryElement(
-          ".ant-select-tree-checkbox-checked:has([title='Appfolio'])",
-          5000
-        );
-        console.log(checkboxJobGroup);
-        if (!checkboxJobGroup) {
-          this.startSimulation();
-          try {
-            this.simulateInputTyping(inputJobGroup, jobGroup);
+      const inputJobCitySelector = "#jobInfo\\.address\\.city";
+      const inputJobCity = await this.queryElement(inputJobCitySelector);
+      if (!inputJobCity) {
+        this.sendCriticalErrorMessage("Unable to find City field.");
+        this.allowClicks(true);
+        return false;
+      }
 
-            const jobGroupOption = await this.queryElement(
-              "[data-testid='jobGroup-popup'] .ant-select-tree-list-holder-inner .ant-select-tree-treenode [title='Appfolio']"
-            );
-            if (!jobGroupOption) {
-              await this.sendCriticalErrorMessage("Unable to find option.");
-              return;
-            }
+      const inputJobStateSelector = "#jobInfo\\.address\\.state";
+      const inputJobState = await this.queryElement(inputJobStateSelector);
+      if (!inputJobState) {
+        this.sendCriticalErrorMessage("Unable to find State field.");
+        this.allowClicks(true);
+        return false;
+      }
 
-            this.simulateClick(jobGroupOption);
-          } finally {
-            this.endSimulation();
-          }
-        }
+      const inputJobZipSelector = "#jobInfo\\.address\\.zip";
+      const inputJobZip = await this.queryElement(inputJobZipSelector);
+      if (!inputJobZip) {
+        this.sendCriticalErrorMessage("Unable to find Zip field.");
+        this.allowClicks(true);
+        return false;
+      }
 
-        const labelSpanJobGroup = await this.queryElement(
-          ".ant-select-show-search[data-testid='jobGroup'] .ant-select-selection-overflow"
-        );
+      // dirty work
 
-        const cleanupJobGroup = this.observeMutation(
-          [inputJobGroup, checkboxJobGroup, labelSpanJobGroup],
-          async () => {
-            await setupJobGroupObserver();
-          }
-        );
+      // job title
+      this.simulateClick(inputJobTitle);
+      this.simulateInputBackspace(inputJobTitle, inputJobTitle.value);
+      this.simulateInputTyping(inputJobTitle, jobTitle);
+      this.simulateClick(document.body);
 
-        this.fill_out_observers.set("job_group", cleanupJobGroup);
-      };
-      await setupJobGroupObserver();
+      // job type
+      this.simulateClick(inputJobType);
+      this.simulateInputTyping(inputJobType, jobType);
+      const jobTypeOption = await this.queryElement(
+        "[data-searchvalue='Handyman Services']"
+      );
+      this.simulateClick(jobTypeOption);
 
-      // wait for pending simulations
-      while (this.pending_simulation > 0) {
-        await new Promise((r) => setTimeout(r, 50));
+      // job group
+
+      // let appfolioTagged = false;
+      // const groupSelected = document.querySelectorAll(
+      //   "[data-testid='jobGroup'] .ant-select-selection-overflow-item"
+      // );
+      // for (const group of groupSelected) {
+      //   if (group.textContent === jobGroup) appfolioTagged = true;
+      //   break;
+      // }
+
+      // if (!appfolioTagged) {
+      //   this.simulateClick(inputJobGroup);
+      //   const jobGroupOption = await this.queryElement(
+      //     `[data-testid='jobGroup-popup'] .ant-select-tree-list-holder-inner .ant-select-tree-treenode [title='${jobGroup}']`
+      //   );
+      //   this.simulateClick(jobGroupOption);
+      //   this.simulateClick(document.body);
+      // }
+
+      // job street
+      // this.simulateClick(inputJobStreet);
+      // this.simulateInputBackspace(inputJobStreet, inputJobStreet.value);
+      // this.simulateInputTyping(inputJobStreet, workOrderStreet);
+      // this.simulateClick(document.body);
+
+      // job city
+      // this.simulateClick(inputJobCity);
+      // this.simulateInputBackspace(inputJobCity, inputJobCity.value);
+      // this.simulateInputTyping(inputJobCity, workOrderCity);
+      // this.simulateClick(document.body);
+
+      // job state
+      // this.simulateClick(inputJobState);
+      // this.simulateInputBackspace(inputJobState, inputJobState.value);
+      // this.simulateInputTyping(inputJobState, workOrderState);
+      // this.simulateClick(document.body);
+
+      // job zip
+      this.simulateClick(inputJobZip);
+      this.simulateInputBackspace(inputJobZip, inputJobZip.value);
+      this.simulateInputTyping(inputJobZip, workOrderZip);
+      this.simulateClick(document.body);
+
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // FOR TEST PURPOSE ONLY
+      const buttonCancelLink = await this.queryElement(
+        "button[data-testid='cancelLinking']"
+      );
+      this.simulateClick(buttonCancelLink);
+
+      // next page
+
+      // client page
+      // const clientPageButton = await this.queryElement(
+      //   "button[data-testid='clientsTab']"
+      // );
+      // if (!clientPageButton) {
+      //   this.sendCriticalErrorMessage("Unable to find client tab.");
+      //   this.allowClicks(true);
+      //   return false;
+      // }
+      // this.simulateClick(clientPageButton);
+
+      // add existing client
+      // const existingContactAnchor = await this.queryElement(
+      //   "[data-testid='choose-existing-contact']"
+      // );
+      // if (!existingContactAnchor) {
+      //   this.sendCriticalErrorMessage("Unable to add existing client.");
+      //   this.allowClicks(true);
+      //   return false;
+      // }
+      // this.simulateClick(existingContactAnchor);
+
+      // search client name
+      // const inputNameSearchSelector = "[data-testid='nameSearch']";
+      // const inputNameSearch = await this.queryElement(inputNameSearchSelector);
+      // const buttonNameSearch = await this.queryElement(
+      //   inputNameSearchSelector +
+      //     " + span.ant-input-group-addon button.ant-input-search-button"
+      // );
+      // if (!inputNameSearch || !buttonNameSearch) {
+      //   this.sendCriticalErrorMessage("Unable to search existing client.");
+      //   this.allowClicks(true);
+      //   return false;
+      // }
+      // this.simulateClick(inputNameSearch);
+      // this.simulateInputBackspace(inputNameSearch, inputNameSearch.value);
+      // this.simulateInputTyping(inputNameSearch, jobClient);
+      // this.simulateClick(buttonNameSearch);
+
+      // // select client
+      // const buttonJobClient = await this.queryElement(
+      //   ".ContactSearch-Table tr[data-row-key='39778241'] button[data-testid='select']"
+      // );
+      // if (!buttonJobClient) {
+      //   this.sendCriticalErrorMessage("Unable to select existing client.");
+      //   this.allowClicks(true);
+      //   return false;
+      // }
+      // this.simulateClick(buttonJobClient);
+
+      const saveButton = await this.queryElement(
+        "button#save[data-testid='save']"
+      );
+      if (!saveButton) {
+        this.sendCriticalErrorMessage("Unable to save job.");
+        this.allowClicks(true);
+        return false;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      this.simulateClick(saveButton);
+
+      // check for errors
+      const errors = await this.queryElement(
+        "[data-testid='requiredCorrections']"
+      );
+      if (errors) {
+        this.sendCriticalErrorMessage("Unable to save job.");
+        this.allowClicks(true);
+        return false;
       }
 
       this.allowClicks(true);
@@ -287,7 +344,6 @@
       if (!(input instanceof Element)) throw new Error("Invalid input.");
       if (typeof string !== "string") throw new Error("Invalid string.");
 
-      this.simulateClick(input);
       for (const char of string) {
         const keydownEvent = new KeyboardEvent("keydown", {
           key: char,
@@ -308,7 +364,6 @@
         input.dispatchEvent(inputEvent);
         input.dispatchEvent(keyupEvent);
       }
-      this.simulateClick(document.body);
     },
 
     simulateClick: function (element) {
@@ -339,80 +394,44 @@
       element.dispatchEvent(clickEvent);
     },
 
-    observeMutation: function (elements, callback) {
-      if (elements instanceof Element) elements = [elements];
-      else if (
-        !(Array.isArray(elements) || NodeList.prototype.isPrototypeOf(elements))
-      )
-        throw new Error(
-          "Invalid element(s). Must be Element or array/NodeList of Elements."
-        );
+    simulateInputBackspace: function (input, string) {
+      if (!(input instanceof Element)) throw new Error("Invalid input.");
+      if (typeof string !== "string") throw new Error("Invalid string.");
 
-      if (typeof callback !== "function") throw new Error("Invalid callback.");
-
-      const disconnectors = [];
-
-      for (const element of elements) {
-        const isFormField = element != null && "value" in element;
-
-        // Create a snapshot of what we care about
-        const getSnapshot = () => {
-          const attrString = element
-            ? Array.from(element.attributes)
-                .map((a) => `${a.name}=${a.value}`)
-                .join("|")
-            : "";
-          const content = isFormField
-            ? element?.value || ""
-            : element?.textContent || "";
-          return attrString + "||" + content;
-        };
-
-        let lastSnapshot = getSnapshot();
-        let userHasEdited = false;
-
-        const markUserEdit = (e) => {
-          if (e.isTrusted || !e.synthetic) userHasEdited = true;
-        };
-
-        const editEvents = [
-          "input",
-          "change",
-          "keydown",
-          "keyup",
-          "mousedown",
-          "mouseup",
-          "focus",
-          "click",
-          "blur",
-        ];
-        for (const type of editEvents)
-          if (element) element.addEventListener(type, markUserEdit);
-
-        const observer = new MutationObserver(async () => {
-          const snapshot = getSnapshot();
-          if (snapshot === lastSnapshot) return; // ignore redundant calls
-
-          lastSnapshot = snapshot;
-          await callback(element);
+      for (const char of string) {
+        const keydownEvent = new KeyboardEvent("keydown", {
+          key: "Backspace",
+          code: "Backspace",
+          keyCode: 8,
+          which: 8,
+          bubbles: true,
+        });
+        const inputEvent = new Event("input", { bubbles: true });
+        const keyupEvent = new KeyboardEvent("keyup", {
+          key: "Backspace",
+          code: "Backspace",
+          keyCode: 8,
+          which: 8,
+          bubbles: true,
         });
 
-        if (element)
-          observer.observe(element, {
-            attributes: true,
-            childList: true,
-            characterData: true,
-            subtree: true,
-          });
+        keydownEvent.synthetic = true;
+        inputEvent.synthetic = true;
+        keyupEvent.synthetic = true;
 
-        disconnectors.push(() => {
-          observer.disconnect();
-          for (const type of editEvents)
-            if (element) element.removeEventListener(type, markUserEdit);
-        });
+        input.dispatchEvent(keydownEvent);
+        input.value = input.value.slice(0, -1);
+        input.dispatchEvent(inputEvent);
+        input.dispatchEvent(keyupEvent);
       }
+    },
 
-      return () => disconnectors.forEach((fn) => fn());
+    simulateBlur: function (input) {
+      if (!(input instanceof Element)) throw new Error("Invalid input.");
+
+      const blurEvent = new FocusEvent("blur", { bubbles: false });
+      blurEvent.synthetic = true;
+      input.dispatchEvent(blurEvent);
     },
 
     sendCriticalErrorMessage: async function (string) {

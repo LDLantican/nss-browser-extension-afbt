@@ -1,11 +1,21 @@
 html:has([data-nss-processing="true"]) {
-  cursor: not-allowed;
+  cursor: wait;
 }
 html:has([data-nss-processing="true"]) body {
-  opacity: 0.5;
   pointer-events: none;
+  animation: nss-load 1s ease-in-out infinite alternate;
 }
 
 body {
   transition: opacity 500ms ease-in-out;
+}
+
+@keyframes nss-load {
+  from {
+    opacity: 0.1;
+  }
+
+  to {
+    opacity: 0.3;
+  }
 }
