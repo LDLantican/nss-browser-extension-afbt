@@ -273,7 +273,7 @@
       // check for success
 
       const success = await this.queryElement(".ant-message-success");
-      if (success && success.textContent === "Job saved successfully") {
+      if (success) {
         await browser.runtime.sendMessage({
           type: "FILL_JOB_COMPLETE",
           payload: work_order,
