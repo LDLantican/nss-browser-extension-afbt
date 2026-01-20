@@ -221,7 +221,7 @@
 
       // add existing client
       const existingContactAnchor = await this.queryElement(
-        "[data-testid='choose-existing-contact']"
+        "[data-testid='searchContactInfoEmptyState']"
       );
       if (!existingContactAnchor) {
         this.sendCriticalErrorMessage("Unable to add existing client.");
