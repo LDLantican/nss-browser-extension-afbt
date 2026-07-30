@@ -44,13 +44,31 @@
           "Something went wrong. Please check if you're logged in Buildertrend.",
         );
       } else {
-        browser.runtime.sendMessage({ type: "ADD_JOB_PAGE_READY" });
+        this.sendMessage("ADD_JOB_PAGE_READY");
       }
 
       this.allowClicks(true);
     },
 
+    // Always releases the page and the in-flight request, otherwise one failed
+    // job leaves the tab refusing every job after it.
     fillOut: async function (work_order) {
+      try {
+        return await this.attemptFillOut(work_order);
+      } catch (error) {
+        this.sendCriticalErrorMessage(
+          `Something went wrong while adding the job: ${
+            error?.message || "Unexpected error."
+          }`,
+        );
+        return false;
+      } finally {
+        this.current_fill_request = null;
+        this.allowClicks(true);
+      }
+    },
+
+    attemptFillOut: async function (work_order) {
       if (typeof work_order !== "object") throw new Error("Invalid work order");
 
       const workOrderNumber = work_order.number || "";
@@ -76,7 +94,6 @@
 
       if (!quickBookWidget) {
         this.sendCriticalErrorMessage("Unable to find accounting link.");
-        this.allowClicks(true);
         return false;
       }
 
@@ -84,7 +101,6 @@
       const inputJobTitle = await this.queryElement(inputJobTitleIdSelector);
       if (!inputJobTitle) {
         this.sendCriticalErrorMessage("Unable to find Job Title field.");
-        this.allowClicks(true);
         return false;
       }
 
@@ -93,7 +109,6 @@
       const inputJobType = await this.queryElement(inputJobTypeIdSelector);
       if (!inputJobType) {
         this.sendCriticalErrorMessage("Unable to find Job Type field.");
-        this.allowClicks(true);
         return false;
       }
 
@@ -102,7 +117,6 @@
       const inputJobGroup = await this.queryElement(inputJobGroupSelector);
       if (!inputJobGroup) {
         this.sendCriticalErrorMessage("Unable to find Job Group field.");
-        this.allowClicks(true);
         return false;
       }
 
@@ -110,7 +124,6 @@
       const inputJobStreet = await this.queryElement(inputJobStreetSelector);
       if (!inputJobStreet) {
         this.sendCriticalErrorMessage("Unable to find Street field.");
-        this.allowClicks(true);
         return false;
       }
 
@@ -118,7 +131,6 @@
       const inputJobCity = await this.queryElement(inputJobCitySelector);
       if (!inputJobCity) {
         this.sendCriticalErrorMessage("Unable to find City field.");
-        this.allowClicks(true);
         return false;
       }
 
@@ -126,7 +138,6 @@
       const inputJobState = await this.queryElement(inputJobStateSelector);
       if (!inputJobState) {
         this.sendCriticalErrorMessage("Unable to find State field.");
-        this.allowClicks(true);
         return false;
       }
 
@@ -134,7 +145,6 @@
       const inputJobZip = await this.queryElement(inputJobZipSelector);
       if (!inputJobZip) {
         this.sendCriticalErrorMessage("Unable to find Zip field.");
-        this.allowClicks(true);
         return false;
       }
 
@@ -215,7 +225,6 @@
       );
       if (!clientPageButton) {
         this.sendCriticalErrorMessage("Unable to find client tab.");
-        this.allowClicks(true);
         return false;
       }
       this.simulateClick(clientPageButton);
@@ -227,7 +236,6 @@
       );
       if (!existingContactAnchor) {
         this.sendCriticalErrorMessage("Unable to add existing client.");
-        this.allowClicks(true);
         return false;
       }
       this.simulateClick(existingContactAnchor);
@@ -244,7 +252,6 @@
         this.sendCriticalErrorMessage(
           "Unable to search existing client. Cannot find search field / button",
         );
-        this.allowClicks(true);
         return false;
       }
       this.simulateClick(inputNameSearch);
@@ -258,7 +265,6 @@
       );
       if (!buttonJobClient) {
         this.sendCriticalErrorMessage("Unable to select existing client.");
-        this.allowClicks(true);
         return false;
       }
       this.simulateClick(buttonJobClient);
@@ -269,40 +275,153 @@
       );
       if (!saveButton) {
         this.sendCriticalErrorMessage("Unable to save job.");
-        this.allowClicks(true);
         return false;
       }
 
+      // check for success / error
+
       await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      // Anything already on screen belongs to an earlier action, so it must not
+      // be mistaken for the outcome of this save.
+      const staleOutcomes = new WeakSet(this.querySaveOutcomeNodes());
+
       this.simulateClick(saveButton);
 
-      // check for success
+      const outcome = await this.waitForSaveOutcome(staleOutcomes);
 
-      const success = await this.queryElement(".ant-message-success");
-      if (success) {
-        await browser.runtime.sendMessage({
-          type: "FILL_JOB_COMPLETE",
-          payload: work_order,
-        });
+      if (outcome.result === "success") {
+        // The job already exists in Buildertrend at this point, so a messaging
+        // hiccup here must not be reported as a failed save.
+        try {
+          await browser.runtime.sendMessage({
+            type: "FILL_JOB_COMPLETE",
+            payload: work_order,
+          });
+        } catch {
+          this.sendFlashMessage(
+            "error",
+            `${workOrderNumber} was added but could not be removed from the queue.`,
+          );
+        }
 
         this.sendFlashMessage(
           "alert",
           `${workOrderNumber} successfully added.`,
         );
-      } else {
-        // check for errors
-        const errors = await this.queryElement(
-          "[data-testid='requiredCorrections']",
-        );
-        if (errors) {
-          this.sendCriticalErrorMessage("Unable to save job.");
-          this.allowClicks(true);
-          return false;
-        }
+        return true;
       }
 
-      this.current_fill_request = null;
-      this.allowClicks(true);
+      if (outcome.result === "error") {
+        this.sendCriticalErrorMessage(
+          outcome.message
+            ? `Unable to save job: ${outcome.message}`
+            : "Unable to save job.",
+        );
+        return false;
+      }
+
+      this.sendCriticalErrorMessage(
+        `Unable to confirm whether ${workOrderNumber} was saved. Please check Buildertrend before trying again.`,
+      );
+      return false;
+    },
+
+    // Signals that reveal how the save went. Ordered by trust: an explicit
+    // message beats the fallback navigation check.
+    save_outcome_signals: [
+      { result: "success", selector: ".ant-message-success" },
+      { result: "error", selector: ".ant-message-error" },
+      { result: "error", selector: "[data-testid='requiredCorrections']" },
+      { result: "error", selector: ".ant-form-item-explain-error" },
+    ],
+
+    querySaveOutcomeNodes: function () {
+      const selector = this.save_outcome_signals
+        .map((signal) => signal.selector)
+        .join(",");
+
+      return document.querySelectorAll(selector);
+    },
+
+    // Polls every signal together so a failure is reported the moment it shows
+    // up instead of after the success check has timed out.
+    waitForSaveOutcome: function (ignore, timeout = 20000) {
+      const ignored = ignore instanceof WeakSet ? ignore : new WeakSet();
+
+      const read = () => {
+        for (const signal of this.save_outcome_signals) {
+          for (const node of document.querySelectorAll(signal.selector)) {
+            if (ignored.has(node)) continue;
+            if (!this.isElementVisible(node)) continue;
+
+            return {
+              result: signal.result,
+              message: this.readMessage(node),
+            };
+          }
+        }
+
+        // A saved job gets its own id, so leaving the "new job" page (id 0) is
+        // itself proof the save went through.
+        const jobPageId = location.pathname.match(/\/JobPage\/(\d+)/i);
+        if (jobPageId && jobPageId[1] !== "0")
+          return { result: "success", message: "" };
+
+        return null;
+      };
+
+      return new Promise((resolve) => {
+        const settle = (outcome) => {
+          clearInterval(poller);
+          clearTimeout(timer);
+          resolve(outcome);
+        };
+
+        const check = () => {
+          let outcome = null;
+          try {
+            outcome = read();
+          } catch {
+            outcome = null;
+          }
+          if (outcome) settle(outcome);
+        };
+
+        const poller = setInterval(check, 200);
+        const timer = setTimeout(
+          () => settle({ result: "unknown", message: "" }),
+          timeout,
+        );
+
+        check();
+      });
+    },
+
+    isElementVisible: function (element) {
+      if (!(element instanceof Element)) return false;
+      if (!element.isConnected) return false;
+
+      const hasBox =
+        element.offsetWidth > 0 ||
+        element.offsetHeight > 0 ||
+        element.getClientRects().length > 0;
+      if (!hasBox) return false;
+
+      // Ant toasts fade out rather than unmount, so a fading node is history.
+      const style = window.getComputedStyle(element);
+      return (
+        style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        style.opacity !== "0"
+      );
+    },
+
+    readMessage: function (element) {
+      if (!(element instanceof Element)) return "";
+
+      const message = (element.textContent || "").replace(/\s+/g, " ").trim();
+      return message.length > 200 ? `${message.slice(0, 200)}…` : message;
     },
 
     queryElement: function (selector, timeout = 10000) {
@@ -458,32 +577,35 @@
       input.dispatchEvent(blurEvent);
     },
 
-    sendCriticalErrorMessage: async function (string) {
-      if (typeof string !== "string") throw new Error("Invalid string.");
-
-      browser.runtime.sendMessage({
-        type: "CRITICAL_ERROR",
-        payload: string,
-      });
+    // Reporting must never throw: a closed popup has no listener, and losing the
+    // report is not a reason to break the run that is reporting.
+    sendMessage: function (type, payload) {
+      try {
+        const sending = browser.runtime.sendMessage({ type, payload });
+        if (sending && typeof sending.catch === "function")
+          sending.catch(() => {});
+      } catch {
+        // no receiver
+      }
     },
 
-    sendFlashMessage: async function (type, string) {
+    sendCriticalErrorMessage: function (string) {
+      if (typeof string !== "string") throw new Error("Invalid string.");
+
+      this.sendMessage("CRITICAL_ERROR", string);
+    },
+
+    sendFlashMessage: function (type, string) {
       if (typeof type !== "string") throw new Error("Invalid flash type.");
       if (typeof string !== "string") throw new Error("Invalid string.");
 
       switch (type) {
         case "alert":
-          browser.runtime.sendMessage({
-            type: "FLASH_ALERT",
-            payload: string,
-          });
+          this.sendMessage("FLASH_ALERT", string);
           break;
 
         case "error":
-          browser.runtime.sendMessage({
-            type: "FLASH_ERROR",
-            payload: string,
-          });
+          this.sendMessage("FLASH_ERROR", string);
           break;
       }
     },
