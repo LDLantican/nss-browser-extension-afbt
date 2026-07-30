@@ -34,14 +34,14 @@
 
       if (!error) {
         const btMainNavigation = await this.queryElement(
-          "[data-testid='bt-main-navigation']"
+          "[data-testid='bt-main-navigation']",
         );
         if (!btMainNavigation) error = true;
       }
 
       if (error) {
         this.sendCriticalErrorMessage(
-          "Something went wrong. Please check if you're logged in Buildertrend."
+          "Something went wrong. Please check if you're logged in Buildertrend.",
         );
       } else {
         browser.runtime.sendMessage({ type: "ADD_JOB_PAGE_READY" });
@@ -71,7 +71,7 @@
       this.allowClicks(false);
 
       const quickBookWidget = await this.queryElement(
-        "[data-testid='accountingLinkingCard'] img.quickbooks-logo"
+        "[data-testid='accountingLinkingCard'] img.quickbooks-logo",
       );
 
       if (!quickBookWidget) {
@@ -80,7 +80,7 @@
         return false;
       }
 
-      const inputJobTitleIdSelector = "#jobInfo\\.jobName";
+      const inputJobTitleIdSelector = "#item-header-title";
       const inputJobTitle = await this.queryElement(inputJobTitleIdSelector);
       if (!inputJobTitle) {
         this.sendCriticalErrorMessage("Unable to find Job Title field.");
@@ -150,7 +150,7 @@
       this.simulateClick(inputJobType);
       this.simulateInputTyping(inputJobType, jobType);
       const jobTypeOption = await this.queryElement(
-        "[data-searchvalue='Handyman Services']"
+        "[data-searchvalue='Handyman Services']",
       );
       this.simulateClick(jobTypeOption);
 
@@ -158,7 +158,7 @@
 
       let appfolioTagged = false;
       const groupSelected = document.querySelectorAll(
-        "[data-testid='jobGroup'] .ant-select-selection-overflow-item"
+        "[data-testid='jobGroup'] .ant-select-selection-overflow-item",
       );
       for (const group of groupSelected) {
         if (group.textContent === jobGroup) appfolioTagged = true;
@@ -168,7 +168,7 @@
       if (!appfolioTagged) {
         this.simulateClick(inputJobGroup);
         const jobGroupOption = await this.queryElement(
-          `[data-testid='jobGroup-popup'] .ant-select-tree-list-holder-inner .ant-select-tree-treenode [title='${jobGroup}']`
+          `[data-testid='jobGroup-popup'] .ant-select-tree-list-holder-inner .ant-select-tree-treenode [title='${jobGroup}']`,
         );
         this.simulateClick(jobGroupOption);
         this.simulateClick(document.body);
@@ -210,7 +210,8 @@
 
       // client page
       const clientPageButton = await this.queryElement(
-        "button[data-testid='clientsTab']"
+        // "button[data-testid='clientsTab']",
+        "div#rc-tabs-0-tab-2",
       );
       if (!clientPageButton) {
         this.sendCriticalErrorMessage("Unable to find client tab.");
@@ -221,7 +222,8 @@
 
       // add existing client
       const existingContactAnchor = await this.queryElement(
-        "[data-testid='searchContactInfoEmptyState']"
+        // "[data-testid='searchContactInfoEmptyState']",
+        "button#searchContactInfoEmptyState",
       );
       if (!existingContactAnchor) {
         this.sendCriticalErrorMessage("Unable to add existing client.");
@@ -231,14 +233,17 @@
       this.simulateClick(existingContactAnchor);
 
       // search client name
-      const inputNameSearchSelector = "[data-testid='nameSearch']";
+      // const inputNameSearchSelector = "[data-testid='nameSearch']";
+      const inputNameSearchSelector = "input#nameSearch";
       const inputNameSearch = await this.queryElement(inputNameSearchSelector);
       const buttonNameSearch = await this.queryElement(
         inputNameSearchSelector +
-          " + span.ant-input-group-addon button.ant-input-search-button"
+          " + span.ant-input-group-addon button.ant-input-search-button",
       );
       if (!inputNameSearch || !buttonNameSearch) {
-        this.sendCriticalErrorMessage("Unable to search existing client.");
+        this.sendCriticalErrorMessage(
+          "Unable to search existing client. Cannot find search field / button",
+        );
         this.allowClicks(true);
         return false;
       }
@@ -249,7 +254,7 @@
 
       // select client
       const buttonJobClient = await this.queryElement(
-        ".ContactSearch-Table tr[data-row-key='39778241'] button[data-testid='select']"
+        ".ContactSearch-Table tr[data-row-key='39778241'] button[data-testid='select']",
       );
       if (!buttonJobClient) {
         this.sendCriticalErrorMessage("Unable to select existing client.");
@@ -259,7 +264,8 @@
       this.simulateClick(buttonJobClient);
 
       const saveButton = await this.queryElement(
-        "button#save[data-testid='save']"
+        // "button#save[data-testid='save']",
+        "[data-testid='bt-item-header-action-buttons-overflow'] button[data-testid='save']",
       );
       if (!saveButton) {
         this.sendCriticalErrorMessage("Unable to save job.");
@@ -281,12 +287,12 @@
 
         this.sendFlashMessage(
           "alert",
-          `${workOrderNumber} successfully added.`
+          `${workOrderNumber} successfully added.`,
         );
       } else {
         // check for errors
         const errors = await this.queryElement(
-          "[data-testid='requiredCorrections']"
+          "[data-testid='requiredCorrections']",
         );
         if (errors) {
           this.sendCriticalErrorMessage("Unable to save job.");
@@ -487,7 +493,7 @@
     if (message.type === "FILL_OUT_JOB") {
       if (content.current_fill_request) {
         content.sendCriticalErrorMessage(
-          "There is an existing process request. Please wait until it's done."
+          "There is an existing process request. Please wait until it's done.",
         );
         return;
       }
