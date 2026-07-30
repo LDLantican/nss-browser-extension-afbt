@@ -4,50 +4,117 @@
   const content = {
     auth_local_storage_key: "bt-object-previousAuthStoreInfo",
     current_fill_request: null,
+    page_state_promise: null,
 
     init: async function () {
       this.allowClicks(false);
 
-      let error = false;
+      try {
+        const state = await this.pageState();
 
-      const rawAuthData = localStorage.getItem(this.auth_local_storage_key);
-      if (!rawAuthData) {
-        error = true;
-      } else {
-        const authData = JSON.parse(rawAuthData);
-        if (!authData.username) error = true;
-      }
+        if (state === "ready") {
+          this.sendMessage("ADD_JOB_PAGE_READY");
+          return;
+        }
 
-      if (!error) {
-        const antTypographies = await this.queryAllElements(".ant-typography");
-        antTypographies.forEach((typography) => {
-          const message = typography.textContent || "";
-          if (
-            message !==
-            "Sorry, something went wrong and our systems are currently unavailable. Thank you for your patience as we work to restore access as quickly as possible."
-          )
-            return;
-
-          error = true;
-        });
-      }
-
-      if (!error) {
-        const btMainNavigation = await this.queryElement(
-          "[data-testid='bt-main-navigation']",
-        );
-        if (!btMainNavigation) error = true;
-      }
-
-      if (error) {
         this.sendCriticalErrorMessage(
-          "Something went wrong. Please check if you're logged in Buildertrend.",
+          this.page_state_messages[state] ||
+            this.page_state_messages.unconfirmed,
         );
-      } else {
-        this.sendMessage("ADD_JOB_PAGE_READY");
+      } finally {
+        this.allowClicks(true);
+      }
+    },
+
+    // Memoized so a status request from the background reuses the verdict
+    // instead of starting a second wait.
+    pageState: function () {
+      if (!this.page_state_promise) {
+        this.page_state_promise = this.determinePageState().catch(
+          () => "unconfirmed",
+        );
       }
 
-      this.allowClicks(true);
+      return this.page_state_promise;
+    },
+
+    // Positive proof the app shell rendered. Any one of these is enough:
+    // insisting on a single selector turns one slow render into a bogus
+    // "you're not logged in".
+    ready_signals: [
+      "[data-testid='bt-main-navigation']",
+      "[data-testid='accountingLinkingCard']",
+      "#item-header-title",
+    ],
+
+    // Affirmative proof the session is gone. The ABSENCE of a ready signal is
+    // never treated as proof of this - that is almost always just a slow load.
+    signed_out_signals: [
+      "input[type='password']",
+      "[data-testid='sessionExpired']",
+      "[data-testid='login-form']",
+    ],
+
+    outage_signature: "our systems are currently unavailable",
+
+    page_state_messages: {
+      "signed-out":
+        "You appear to be signed out of Buildertrend. Please log in and try again.",
+      outage:
+        "Buildertrend reports that its systems are currently unavailable. Please try again later.",
+      loading:
+        "The Buildertrend job page did not finish loading in time. Please reload the page and try again.",
+      unconfirmed:
+        "Unable to confirm your Buildertrend session. Please check that you're logged in, then reload the page.",
+    },
+
+    determinePageState: async function (timeout = 45000) {
+      const state = await this.pollUntil(
+        () => {
+          for (const selector of this.signed_out_signals) {
+            if (this.isElementVisible(document.querySelector(selector)))
+              return "signed-out";
+          }
+
+          if (this.hasOutageMessage()) return "outage";
+
+          for (const selector of this.ready_signals) {
+            if (document.querySelector(selector)) return "ready";
+          }
+
+          return null;
+        },
+        { timeout, interval: 250 },
+      );
+
+      if (state) return state;
+
+      // Nothing conclusive. The cached auth store is only a hint, so it is used
+      // to pick the wording - never to declare the user logged out on its own.
+      return this.readAuthUsername() ? "loading" : "unconfirmed";
+    },
+
+    hasOutageMessage: function () {
+      for (const typography of document.querySelectorAll(".ant-typography")) {
+        const message = typography.textContent || "";
+        if (message.includes(this.outage_signature)) return true;
+      }
+
+      return false;
+    },
+
+    // Never throws: a malformed auth blob used to reject init() outright, which
+    // left the popup waiting on a handshake that could no longer arrive.
+    readAuthUsername: function () {
+      try {
+        const raw = localStorage.getItem(this.auth_local_storage_key);
+        if (!raw) return "";
+
+        const data = JSON.parse(raw);
+        return typeof data?.username === "string" ? data.username : "";
+      } catch {
+        return "";
+      }
     },
 
     // Always releases the page and the in-flight request, otherwise one failed
@@ -80,8 +147,8 @@
       // const workOrderZip = "1234"; // FOR TESTING
       // const workOrderZip = ""; // FOR TESTING
 
-      const jobTitle = "(" + workOrderNumber + ") " + workOrderStreet;
-      // const jobTitle = "2737 a test"; // FOR TESTING
+      // const jobTitle = "(" + workOrderNumber + ") " + workOrderStreet;
+      const jobTitle = "2737 a test"; // FOR TESTING
       const jobType = "Handyman Services";
       const jobGroup = "Appfolio";
       const jobClient = "Camelot Properties";
@@ -349,50 +416,60 @@
     waitForSaveOutcome: function (ignore, timeout = 20000) {
       const ignored = ignore instanceof WeakSet ? ignore : new WeakSet();
 
-      const read = () => {
-        for (const signal of this.save_outcome_signals) {
-          for (const node of document.querySelectorAll(signal.selector)) {
-            if (ignored.has(node)) continue;
-            if (!this.isElementVisible(node)) continue;
+      return this.pollUntil(
+        () => {
+          for (const signal of this.save_outcome_signals) {
+            for (const node of document.querySelectorAll(signal.selector)) {
+              if (ignored.has(node)) continue;
+              if (!this.isElementVisible(node)) continue;
 
-            return {
-              result: signal.result,
-              message: this.readMessage(node),
-            };
+              return {
+                result: signal.result,
+                message: this.readMessage(node),
+              };
+            }
           }
-        }
 
-        // A saved job gets its own id, so leaving the "new job" page (id 0) is
-        // itself proof the save went through.
-        const jobPageId = location.pathname.match(/\/JobPage\/(\d+)/i);
-        if (jobPageId && jobPageId[1] !== "0")
-          return { result: "success", message: "" };
+          // A saved job gets its own id, so leaving the "new job" page (id 0)
+          // is itself proof the save went through.
+          const jobPageId = location.pathname.match(/\/JobPage\/(\d+)/i);
+          if (jobPageId && jobPageId[1] !== "0")
+            return { result: "success", message: "" };
 
-        return null;
-      };
+          return null;
+        },
+        { timeout, fallback: { result: "unknown", message: "" } },
+      );
+    },
+
+    // Re-reads the page until `read` returns something truthy. Polling rather
+    // than a one-shot query is what keeps a slow render from being mistaken for
+    // a verdict.
+    pollUntil: function (
+      read,
+      { timeout = 20000, interval = 200, fallback = null } = {},
+    ) {
+      if (typeof read !== "function") throw new Error("Invalid reader.");
 
       return new Promise((resolve) => {
-        const settle = (outcome) => {
+        const settle = (result) => {
           clearInterval(poller);
           clearTimeout(timer);
-          resolve(outcome);
+          resolve(result);
         };
 
         const check = () => {
-          let outcome = null;
+          let result = null;
           try {
-            outcome = read();
+            result = read();
           } catch {
-            outcome = null;
+            result = null;
           }
-          if (outcome) settle(outcome);
+          if (result) settle(result);
         };
 
-        const poller = setInterval(check, 200);
-        const timer = setTimeout(
-          () => settle({ result: "unknown", message: "" }),
-          timeout,
-        );
+        const poller = setInterval(check, interval);
+        const timer = setTimeout(() => settle(fallback), timeout);
 
         check();
       });
@@ -612,22 +689,44 @@
   };
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Lets the background confirm the page is usable before asking it to fill,
+    // including when the tab was already sitting on the add-job page.
+    if (message.type === "ADD_JOB_PAGE_STATUS") {
+      content.pageState().then((state) => sendResponse({ state }));
+      return true;
+    }
+
     if (message.type === "FILL_OUT_JOB") {
       if (content.current_fill_request) {
         content.sendCriticalErrorMessage(
           "There is an existing process request. Please wait until it's done.",
         );
+        sendResponse({ accepted: false });
         return;
       }
-      const workOrder = message.payload || {};
-      if (!workOrder || !workOrder?.number) return;
 
+      const workOrder = message.payload || {};
+      if (!workOrder || !workOrder?.number) {
+        content.sendCriticalErrorMessage("Received an invalid work order.");
+        sendResponse({ accepted: false });
+        return;
+      }
+
+      // Answered right away rather than when the fill finishes - the request is
+      // long running, and an unanswered port looks like a dead page.
       content.current_fill_request = workOrder;
+      sendResponse({ accepted: true });
+
       content.fillOut(workOrder);
     }
   });
 
-  window.addEventListener("load", () => {
+  // document_idle can run this script after "load" has already fired, in which
+  // case waiting for the event means init() never runs and the background waits
+  // forever on a handshake that will never be sent.
+  if (document.readyState === "complete") {
     content.init();
-  });
+  } else {
+    window.addEventListener("load", () => content.init(), { once: true });
+  }
 })();
