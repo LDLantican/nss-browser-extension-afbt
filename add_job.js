@@ -147,8 +147,8 @@
       // const workOrderZip = "1234"; // FOR TESTING
       // const workOrderZip = ""; // FOR TESTING
 
-      // const jobTitle = "(" + workOrderNumber + ") " + workOrderStreet;
-      const jobTitle = "2737 a test"; // FOR TESTING
+      const jobTitle = "(" + workOrderNumber + ") " + workOrderStreet;
+      // const jobTitle = "2737 a test"; // FOR TESTING
       const jobType = "Handyman Services";
       const jobGroup = "Appfolio";
       const jobClient = "Camelot Properties";
