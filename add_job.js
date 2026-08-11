@@ -159,10 +159,17 @@
         "[data-testid='accountingLinkingCard'] img.quickbooks-logo",
       );
 
-      if (!quickBookWidget) {
-        this.sendCriticalErrorMessage("Unable to find accounting link.");
-        return false;
-      }
+      /**
+       * TEMPORARY fix. Buildertrend Quickbooks disappeared probably something 
+       * on their end. Once it goes back, enable this check back since filling 
+       * out the fields without waiting for this widget will reset the field 
+       * once it loads in the page. We wait for this widget to avoid wiping out 
+       * the filled out fields.
+       **/
+      // if (!quickBookWidget) {
+      //   this.sendCriticalErrorMessage("Unable to find accounting link.");
+      //   return false;
+      // }
 
       const inputJobTitleIdSelector = "#item-header-title";
       const inputJobTitle = await this.queryElement(inputJobTitleIdSelector);
