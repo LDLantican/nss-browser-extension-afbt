@@ -24,6 +24,11 @@
  *
  * The list page is still used for one thing it is better at: knowing which rows
  * exist and what their numbers are.
+ *
+ * **Confirmed against a live Appfolio list on 4 September 2026**: every row does
+ * carry a link to its work order, so the fetch path is the one that runs. The
+ * in-place fallback below is kept anyway — it costs one branch, and it means a
+ * change on Appfolio's side degrades this rather than breaking it.
  */
 
 (() => {

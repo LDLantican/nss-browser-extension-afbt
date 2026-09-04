@@ -59,7 +59,10 @@ settings never signs anybody out.
 ## Using it
 
 **On the AppFolio work-order list**, every row gets a tick box and a status
-badge read live from the web app. Nothing is ever ticked for you: not every
+badge read live from the web app. A row is read by fetching its own work-order
+page and parsing it — confirmed working against a live list — rather than by
+clicking expand and reading the fields on the next statement, which is the race
+that used to leave fields empty. Nothing is ever ticked for you: not every
 AppFolio work order is ASH's, and there is no field that says which are, so the
 choice stays yours. Shift-click selects a range. The bar at the bottom sends
 what is ticked, and optionally queues the same rows for Buildertrend.
