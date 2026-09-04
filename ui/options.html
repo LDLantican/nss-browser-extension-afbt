@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Appfolio Helper — Settings</title>
+    <link rel="stylesheet" href="common.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="page__head">
+        <h1>Appfolio Helper settings</h1>
+        <p class="field__hint">
+          Sends Appfolio work orders to the Alabama Signature Homes web app, and
+          optionally enters them into Buildertrend.
+        </p>
+      </header>
+
+      <p class="notice" id="alert" hidden></p>
+
+      <!--
+        Order matters here: nothing below works until there is an address, and
+        signing in needs one to sign in to. So the sections read top to bottom
+        as the order they must be done in.
+      -->
+      <section class="card">
+        <h2>1 · The web app</h2>
+
+        <form id="app-form">
+          <label class="field">
+            <span class="field__label">Web app address</span>
+            <input
+              class="field__input"
+              type="url"
+              id="app-url"
+              name="app_url"
+              placeholder="https://alabamasignaturehomes.com"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <span class="field__hint">
+              The site's address, with no path — for example
+              <code>http://localhost/projects/alabamasignaturehomes</code> while
+              testing. Saving asks the browser for permission to talk to it.
+            </span>
+          </label>
+
+          <p class="card__actions">
+            <button class="btn" type="submit" id="app-save">Save address</button>
+            <span class="field__hint" id="permission-note"></span>
+          </p>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>2 · Sign in</h2>
+
+        <!-- Shown when signed in. -->
+        <div id="signed-in" hidden>
+          <dl class="facts">
+            <dt>Signed in as</dt>
+            <dd id="who"></dd>
+
+            <dt>This device</dt>
+            <dd id="device"></dd>
+
+            <dt>Access expires</dt>
+            <dd id="expires"></dd>
+          </dl>
+
+          <p class="field__hint">
+            You can also end this device's access from
+            <span id="account-link-holder"></span> on the web app, which is
+            where to look if a device you do not recognise is listed.
+          </p>
+
+          <p class="card__actions">
+            <button class="btn btn--quiet" type="button" id="sign-out">
+              Sign out this device
+            </button>
+            <button class="link" type="button" id="recheck">Check now</button>
+          </p>
+        </div>
+
+        <!-- Shown when signed out. -->
+        <form id="sign-in-form" hidden>
+          <label class="field">
+            <span class="field__label">Email</span>
+            <input
+              class="field__input"
+              type="email"
+              id="email"
+              autocomplete="username"
+              required
+            />
+          </label>
+
+          <label class="field">
+            <span class="field__label">Password</span>
+            <input
+              class="field__input"
+              type="password"
+              id="password"
+              autocomplete="current-password"
+              required
+            />
+            <span class="field__hint">
+              Your password is sent once, to exchange it for a token this browser
+              stores. It is never saved here.
+            </span>
+          </label>
+
+          <label class="field">
+            <span class="field__label">Name for this device</span>
+            <input class="field__input" type="text" id="device-name" maxlength="80" />
+            <span class="field__hint">
+              Shown on your account page beside the button that ends its access,
+              so make it something you would recognise.
+            </span>
+          </label>
+
+          <p class="card__actions">
+            <button class="btn" type="submit" id="sign-in">Sign in</button>
+          </p>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>3 · Buildertrend</h2>
+
+        <label class="check">
+          <input type="checkbox" id="bt-enabled" />
+          <span>
+            <strong>Enter jobs into Buildertrend as well</strong>
+            <span class="field__hint">
+              Turn this off when ASH stops using Buildertrend. The controls
+              disappear from Appfolio and the popup; syncing to the web app is
+              unaffected either way.
+            </span>
+          </span>
+        </label>
+
+        <div id="bt-fields">
+          <p class="field__hint field__hint--lead">
+            These are the values this office fills into every Buildertrend job.
+            They used to be fixed in the extension's code — the client row id was
+            inside a stylesheet selector — so changing which company ASH bills
+            meant a new version.
+          </p>
+
+          <label class="field">
+            <span class="field__label">Job type</span>
+            <input class="field__input" type="text" id="job-type" />
+          </label>
+
+          <label class="field">
+            <span class="field__label">Job group</span>
+            <input class="field__input" type="text" id="job-group" />
+            <span class="field__hint">
+              Buildertrend's filing label. The web app records the same idea as
+              the work order's source.
+            </span>
+          </label>
+
+          <label class="field">
+            <span class="field__label">Client name</span>
+            <input class="field__input" type="text" id="bt-client-name" />
+          </label>
+
+          <label class="field">
+            <span class="field__label">Client row id in Buildertrend</span>
+            <input class="field__input" type="text" id="bt-client-row-id" />
+            <span class="field__hint">
+              Buildertrend's own id for that contact. Required because picking
+              whichever search result comes back first would be a guess, and a
+              guess about who is billed is the wrong kind of guess.
+            </span>
+          </label>
+        </div>
+
+        <p class="card__actions">
+          <button class="btn" type="button" id="bt-save">Save Buildertrend settings</button>
+        </p>
+      </section>
+    </div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

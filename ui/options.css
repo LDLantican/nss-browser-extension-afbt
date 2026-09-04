@@ -1,0 +1,90 @@
+/* =============================================================================
+   The options page
+   =============================================================================
+
+   Opens in a tab (options_ui.open_in_tab), so it gets a reading measure rather
+   than filling a 1400px window — one column, capped, centred. The numbered
+   cards read as the order the steps must be done in, because they are: there is
+   nothing to sign in to before there is an address.
+   ========================================================================== */
+
+body {
+  background: var(--paper-soft);
+  padding: 24px 16px 64px;
+}
+
+.page {
+  max-width: 34rem;
+  margin-inline: auto;
+}
+
+.page__head {
+  margin-bottom: 16px;
+}
+
+.page__head h1 {
+  margin-bottom: 4px;
+}
+
+#alert {
+  margin-bottom: 16px;
+}
+
+.card {
+  padding: 16px;
+  margin-bottom: 16px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.card h2 {
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap);
+  margin-top: 4px;
+}
+
+#bt-fields[hidden] {
+  display: none;
+}
+
+.field__hint--lead {
+  margin-bottom: 12px;
+}
+
+.field__hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 1px 3px;
+  background: #f5f5f5;
+  border-radius: var(--radius);
+  word-break: break-all;
+}
+
+/* ---- the signed-in facts ------------------------------------------------- */
+
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+.facts dt {
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+/* Long tokens and email addresses must not push the grid wider than the page. */
+.facts dd {
+  overflow-wrap: anywhere;
+}

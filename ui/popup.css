@@ -1,0 +1,166 @@
+/* =============================================================================
+   The popup
+   =============================================================================
+
+   A fixed width, because a popup that sizes to its content jumps about as the
+   queue changes — v1 used `width: max-content` and the panel changed width
+   whenever a long address arrived. 380px fits a work-order number, a status
+   pill and an action on one line, which is the row this list is made of.
+
+   The height is capped and the lists scroll rather than the body, so the header
+   and the footer stay put while forty rows go past.
+   ========================================================================== */
+
+body {
+  width: 380px;
+  max-height: 560px;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper-soft);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 10px 12px;
+  background: var(--ink);
+  color: #fff;
+}
+
+.bar .link {
+  color: #fca5a5;
+}
+
+.bar .link:hover {
+  color: #fff;
+}
+
+#alert {
+  margin: 10px 12px 0;
+}
+
+.panel {
+  padding: 12px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-bottom: 6px;
+}
+
+.panel__who {
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-align: right;
+
+  /* The signed-in name can be long and it is the least important thing on the
+     line, so it is what gives way. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap);
+  margin-top: 10px;
+}
+
+.panel__actions:empty {
+  display: none;
+}
+
+.tally {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+/* ---- the ledger ---------------------------------------------------------- */
+
+.jobs {
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+.jobs:empty {
+  display: none;
+}
+
+.job {
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+}
+
+.job:first-child {
+  border-top: 0;
+}
+
+.job__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.job__number {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pushes the actions to the right of the row without needing a spacer. */
+.job__go {
+  margin-left: auto;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.job__where {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+/* The reason a row failed, and the thing a manager is actually reading. Given
+   room to wrap over several lines rather than truncated: "already exists at X
+   but arrived for Y" is useless cut in half. */
+.job__why {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--bad);
+}
+
+.job__actions {
+  margin-top: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+  font-size: 11px;
+}
+
+/* ---- footer -------------------------------------------------------------- */
+
+.foot {
+  margin-top: auto;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+.foot:empty {
+  display: none;
+}

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NSS Appfolio Helper</title>
+    <link rel="stylesheet" href="common.css" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <!--
+      Two sections, in the order they matter. The web app is the pipeline that
+      is being built and the one the day's billing depends on; Buildertrend is
+      the errand that may go away, so it sits second and disappears entirely
+      when it is switched off in Settings.
+    -->
+    <header class="bar">
+      <h1>Appfolio Helper</h1>
+      <button type="button" class="link" id="open-settings">Settings</button>
+    </header>
+
+    <p class="notice notice--warn" id="alert" hidden></p>
+
+    <!-- Shown only when there is nothing configured or nobody signed in. There
+         is no point rendering a queue to somebody who cannot send it. -->
+    <section class="panel" id="setup" hidden>
+      <h2>Not connected</h2>
+      <p class="field__hint" id="setup-note"></p>
+      <p class="panel__actions">
+        <button type="button" class="btn" id="setup-go">Open Settings</button>
+      </p>
+    </section>
+
+    <main id="main" hidden>
+      <section class="panel">
+        <div class="panel__head">
+          <h2>Web app</h2>
+          <span class="panel__who" id="who"></span>
+        </div>
+
+        <p class="tally" id="sync-tally"></p>
+
+        <ul class="jobs" id="jobs"></ul>
+
+        <p class="panel__actions" id="sync-actions"></p>
+      </section>
+
+      <section class="panel" id="bt-panel">
+        <div class="panel__head">
+          <h2>Buildertrend</h2>
+        </div>
+
+        <p class="tally" id="bt-tally"></p>
+
+        <ul class="jobs" id="bt-jobs"></ul>
+
+        <p class="panel__actions" id="bt-actions"></p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span id="foot-note"></span>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

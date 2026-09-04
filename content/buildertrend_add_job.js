@@ -1,3 +1,38 @@
+/**
+ * Filling in Buildertrend's new-job page.
+ *
+ * This is v1's add_job.js, moved and changed as little as possible, and that is
+ * a decision rather than an oversight. Whether ASH keeps Buildertrend is
+ * undecided — the web app exists to replace the billing work that is the only
+ * reason Buildertrend is in the picture — so the selectors and waits below are
+ * expensive knowledge about a system that may be switched off. Rewriting them
+ * would mean re-earning every timing quirk against a live account, for a coin
+ * flip. The comments explaining *why* each wait exists are v1's and are kept
+ * verbatim where they were right.
+ *
+ * What changed:
+ *
+ * 1. **The tenant facts arrive in the message.** Job type, job group, client
+ *    name and the client's contact row id used to be literals in this file —
+ *    the row id inside a CSS selector — so changing which company ASH bills
+ *    meant editing source. They now come from the extension's settings.
+ * 2. **A non-ready page reports itself as such** (ADD_JOB_PAGE_PROBLEM), so the
+ *    service worker's handshake can stop waiting instead of burning fifty
+ *    seconds on a page that has already said it is signed out.
+ * 3. **Dequeuing goes through the service worker's own queue message** rather
+ *    than a bespoke FILL_JOB_COMPLETE the background had to special-case.
+ * 4. **The job-group loop's `break` bug is fixed.** It sat at the end of the
+ *    first iteration unconditionally, so only the first chip was ever checked
+ *    and a job already tagged Appfolio was tagged again.
+ *
+ * One known bug is deliberately left: simulateInputTyping writes input.value
+ * directly instead of going through the native property setter, which is why
+ * Ant Design's React-controlled fields sometimes revert. The correct fix is the
+ * value-tracker bypass, and it is not worth doing here while this page's future
+ * is undecided. It is why several fields need re-typing when Buildertrend
+ * updates its UI.
+ */
+
 (() => {
   if (typeof browser === "undefined") globalThis.browser = chrome;
 
@@ -5,6 +40,14 @@
     auth_local_storage_key: "bt-object-previousAuthStoreInfo",
     current_fill_request: null,
     page_state_promise: null,
+
+    /** Filled from the message; these are only fallbacks. */
+    config: {
+      job_type: "Handyman Services",
+      job_group: "Appfolio",
+      bt_client_name: "Camelot Properties",
+      bt_client_row_id: "39778241",
+    },
 
     init: async function () {
       this.allowClicks(false);
@@ -17,6 +60,9 @@
           return;
         }
 
+        // Two messages on purpose. The problem signal lets the service worker
+        // stop waiting immediately; the text is what a person needs to read.
+        this.sendMessage("ADD_JOB_PAGE_PROBLEM", state);
         this.sendCriticalErrorMessage(
           this.page_state_messages[state] ||
             this.page_state_messages.unconfirmed,
@@ -139,37 +185,38 @@
       if (typeof work_order !== "object") throw new Error("Invalid work order");
 
       const workOrderNumber = work_order.number || "";
-      const workOrderDescription = work_order.description || "";
       const workOrderStreet = work_order.street || "";
       const workOrderCity = work_order.city || "";
       const workOrderState = work_order.state || "";
       const workOrderZip = work_order.zip || "";
-      // const workOrderZip = "1234"; // FOR TESTING
-      // const workOrderZip = ""; // FOR TESTING
 
+      // The same convention the web app derives its title with, so a job has
+      // one name in both systems: "(number) street".
       const jobTitle = "(" + workOrderNumber + ") " + workOrderStreet;
-      // const jobTitle = "2737 a test"; // FOR TESTING
-      const jobType = "Handyman Services";
-      const jobGroup = "Appfolio";
-      const jobClient = "Camelot Properties";
+      const jobType = this.config.job_type;
+      const jobGroup = this.config.job_group;
+      const jobClient = this.config.bt_client_name;
+      const jobClientRowId = this.config.bt_client_row_id;
 
       this.allowClicks(false);
 
-      const quickBookWidget = await this.queryElement(
-        "[data-testid='accountingLinkingCard'] img.quickbooks-logo",
-      );
-
       /**
-       * TEMPORARY fix. Buildertrend Quickbooks disappeared probably something 
-       * on their end. Once it goes back, enable this check back since filling 
-       * out the fields without waiting for this widget will reset the field 
-       * once it loads in the page. We wait for this widget to avoid wiping out 
-       * the filled out fields.
-       **/
-      // if (!quickBookWidget) {
-      //   this.sendCriticalErrorMessage("Unable to find accounting link.");
-      //   return false;
-      // }
+       * The Quickbooks widget wait, currently vestigial.
+       *
+       * Filling the fields before this widget loads makes Buildertrend wipe
+       * them, so v1 waited for it and refused without it. The widget then
+       * disappeared from Buildertrend's side, so the refusal was commented out
+       * — but the wait was left at its full ten seconds, which every job then
+       * paid for nothing.
+       *
+       * Kept as a short wait rather than deleted, because if the widget comes
+       * back the field-wiping comes back with it. Restoring the check means
+       * restoring this timeout too.
+       */
+      await this.queryElement(
+        "[data-testid='accountingLinkingCard'] img.quickbooks-logo",
+        2500,
+      );
 
       const inputJobTitleIdSelector = "#item-header-title";
       const inputJobTitle = await this.queryElement(inputJobTitleIdSelector);
@@ -234,19 +281,28 @@
       this.simulateClick(inputJobType);
       this.simulateInputTyping(inputJobType, jobType);
       const jobTypeOption = await this.queryElement(
-        "[data-searchvalue='Handyman Services']",
+        `[data-searchvalue='${jobType}']`,
       );
+      if (!jobTypeOption) {
+        this.sendCriticalErrorMessage(`Unable to find the "${jobType}" job type.`);
+        return false;
+      }
       this.simulateClick(jobTypeOption);
 
       // job group
-
+      //
+      // Every chip is checked, not just the first. v1 had an unconditional
+      // `break` at the end of the first iteration, so a job already tagged
+      // Appfolio read as untagged and got tagged a second time.
       let appfolioTagged = false;
       const groupSelected = document.querySelectorAll(
         "[data-testid='jobGroup'] .ant-select-selection-overflow-item",
       );
       for (const group of groupSelected) {
-        if (group.textContent === jobGroup) appfolioTagged = true;
-        break;
+        if ((group.textContent || "").trim() === jobGroup) {
+          appfolioTagged = true;
+          break;
+        }
       }
 
       if (!appfolioTagged) {
@@ -254,6 +310,12 @@
         const jobGroupOption = await this.queryElement(
           `[data-testid='jobGroup-popup'] .ant-select-tree-list-holder-inner .ant-select-tree-treenode [title='${jobGroup}']`,
         );
+        if (!jobGroupOption) {
+          this.sendCriticalErrorMessage(
+            `Unable to find the "${jobGroup}" job group.`,
+          );
+          return false;
+        }
         this.simulateClick(jobGroupOption);
         this.simulateClick(document.body);
       }
@@ -284,19 +346,10 @@
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
-      // FOR TEST PURPOSE ONLY
-      // const buttonCancelLink = await this.queryElement(
-      //   "button[data-testid='cancelLinking']"
-      // );
-      // this.simulateClick(buttonCancelLink);
-
       // next page
 
       // client page
-      const clientPageButton = await this.queryElement(
-        // "button[data-testid='clientsTab']",
-        "div#rc-tabs-0-tab-2",
-      );
+      const clientPageButton = await this.queryElement("div#rc-tabs-0-tab-2");
       if (!clientPageButton) {
         this.sendCriticalErrorMessage("Unable to find client tab.");
         return false;
@@ -305,7 +358,6 @@
 
       // add existing client
       const existingContactAnchor = await this.queryElement(
-        // "[data-testid='searchContactInfoEmptyState']",
         "button#searchContactInfoEmptyState",
       );
       if (!existingContactAnchor) {
@@ -315,7 +367,6 @@
       this.simulateClick(existingContactAnchor);
 
       // search client name
-      // const inputNameSearchSelector = "[data-testid='nameSearch']";
       const inputNameSearchSelector = "input#nameSearch";
       const inputNameSearch = await this.queryElement(inputNameSearchSelector);
       const buttonNameSearch = await this.queryElement(
@@ -334,17 +385,23 @@
       this.simulateClick(buttonNameSearch);
 
       // select client
+      //
+      // The row id comes from settings now. It is Buildertrend's own contact id
+      // for the client, and there is no way to find it from the name alone
+      // without trusting whichever row happens to come back first — which for a
+      // billing record is worse than requiring it be configured once.
       const buttonJobClient = await this.queryElement(
-        ".ContactSearch-Table tr[data-row-key='39778241'] button[data-testid='select']",
+        `.ContactSearch-Table tr[data-row-key='${jobClientRowId}'] button[data-testid='select']`,
       );
       if (!buttonJobClient) {
-        this.sendCriticalErrorMessage("Unable to select existing client.");
+        this.sendCriticalErrorMessage(
+          `Unable to select "${jobClient}". Check the Buildertrend client row id in the extension's settings.`,
+        );
         return false;
       }
       this.simulateClick(buttonJobClient);
 
       const saveButton = await this.queryElement(
-        // "button#save[data-testid='save']",
         "[data-testid='bt-item-header-action-buttons-overflow'] button[data-testid='save']",
       );
       if (!saveButton) {
@@ -369,8 +426,8 @@
         // hiccup here must not be reported as a failed save.
         try {
           await browser.runtime.sendMessage({
-            type: "FILL_JOB_COMPLETE",
-            payload: work_order,
+            type: "UNQUEUE_FROM_BT",
+            payload: { numbers: [workOrderNumber] },
           });
         } catch {
           this.sendFlashMessage(
@@ -379,10 +436,7 @@
           );
         }
 
-        this.sendFlashMessage(
-          "alert",
-          `${workOrderNumber} successfully added.`,
-        );
+        this.sendFlashMessage("alert", `${workOrderNumber} successfully added.`);
         return true;
       }
 
@@ -535,38 +589,16 @@
       });
     },
 
-    queryAllElements: function (selector, timeout = 10000) {
-      if (typeof selector !== "string") throw new Error("Invalid selector.");
-
-      let elements = document.querySelectorAll(selector);
-      if (elements.length > 0) return Promise.resolve(elements);
-
-      return new Promise((resolve) => {
-        const observer = new MutationObserver((mutationsList, obs) => {
-          elements = document.querySelectorAll(selector);
-
-          if (elements.length > 0) {
-            obs.disconnect();
-            clearTimeout(timer);
-            resolve(elements);
-          }
-        });
-
-        observer.observe(document.body, { childList: true, subtree: true });
-
-        const timer = setTimeout(() => {
-          observer.disconnect();
-          resolve([]);
-        }, timeout);
-      });
-    },
-
     allowClicks: function (bool) {
       if (typeof bool !== "boolean") throw new Error("Invalid boolean.");
 
       document.body.setAttribute("data-nss-processing", !bool);
     },
 
+    // Known limitation, left in place on purpose: this writes input.value
+    // directly rather than through the native property setter, so React's value
+    // tracker does not see the change and an Ant-controlled field can revert.
+    // See the note at the top of this file for why it is not fixed here.
     simulateInputTyping: function (input, string) {
       if (!(input instanceof Element)) throw new Error("Invalid input.");
       if (typeof string !== "string") throw new Error("Invalid string.");
@@ -653,14 +685,6 @@
       }
     },
 
-    simulateBlur: function (input) {
-      if (!(input instanceof Element)) throw new Error("Invalid input.");
-
-      const blurEvent = new FocusEvent("blur", { bubbles: false });
-      blurEvent.synthetic = true;
-      input.dispatchEvent(blurEvent);
-    },
-
     // Reporting must never throw: a closed popup has no listener, and losing the
     // report is not a reason to break the run that is reporting.
     sendMessage: function (type, payload) {
@@ -708,16 +732,20 @@
         content.sendCriticalErrorMessage(
           "There is an existing process request. Please wait until it's done.",
         );
-        sendResponse({ accepted: false });
+        sendResponse({ accepted: false, error: "A fill is already running." });
         return;
       }
 
-      const workOrder = message.payload || {};
-      if (!workOrder || !workOrder?.number) {
+      const workOrder = message.payload?.work_order || null;
+      if (!workOrder || !workOrder.number) {
         content.sendCriticalErrorMessage("Received an invalid work order.");
-        sendResponse({ accepted: false });
+        sendResponse({ accepted: false, error: "Invalid work order." });
         return;
       }
+
+      // The tenant facts, from the extension's settings. Merged over the
+      // fallbacks so a missing key cannot leave a selector reading "undefined".
+      content.config = { ...content.config, ...(message.payload?.config || {}) };
 
       // Answered right away rather than when the fill finishes - the request is
       // long running, and an unanswered port looks like a dead page.
