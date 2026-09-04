@@ -106,7 +106,7 @@
       const server = (answer.work_orders || {})[app.work_order.number] || null;
 
       if (!server) {
-        app.paint("not in web app", "absent");
+        app.paint("not imported", "absent");
 
         return;
       }

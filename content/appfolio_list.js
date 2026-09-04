@@ -189,7 +189,7 @@
         const server = found[number] || null;
 
         if (!server) {
-          app.paint_badge(number, "not in web app", "absent");
+          app.paint_badge(number, "not imported", "absent");
 
           continue;
         }

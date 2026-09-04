@@ -67,7 +67,7 @@ AppFolio work order is ASH's, and there is no field that says which are, so the
 choice stays yours. Shift-click selects a range. The bar at the bottom sends
 what is ticked, and optionally queues the same rows for Buildertrend.
 
-**A badge says what the web app holds right now** — not in the web app, synced,
+**A badge says what the web app holds right now** — not imported, synced,
 who it is assigned to, whether it is approved. If the web app cannot be reached
 or this device is signed out, every badge says *status unknown* rather than
 showing a remembered value. That is deliberate: a stale badge would cause a
