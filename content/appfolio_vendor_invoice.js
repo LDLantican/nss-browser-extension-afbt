@@ -48,7 +48,15 @@
  * content/buildertrend_add_job.js. It must not be repeated here.
  */
 
-document.addEventListener("DOMContentLoaded", () => {
+/* Not the DOMContentLoaded closure the rest of this project uses as its module
+   scope, and the difference is not stylistic. A content script declared
+   `run_at: document_idle` is injected *after* DOMContentLoaded has fired, so a
+   listener for that event is registered too late and its callback never runs —
+   taking the whole module with it, message handlers included. The symptom is
+   the popup saying "That page did not answer" forever, on a page whose markup
+   is perfectly fine. content/buildertrend_add_job.js has always bootstrapped
+   the way this now does. */
+(() => {
   const app = {
     /**
      * Every hook this script uses.
@@ -118,8 +126,6 @@ document.addEventListener("DOMContentLoaded", () => {
           type: "VENDOR_PAGE_SEEN",
           payload: { number, url: app.work_order_url() },
         });
-
-      chrome.runtime.onMessage.addListener(app.handle_message);
     },
 
     /**
@@ -956,7 +962,13 @@ document.addEventListener("DOMContentLoaded", () => {
     },
   };
 
-  window.addEventListener("load", () => {
-    app.init();
-  });
-});
+  /* Registered here rather than from init(), because init() waits for the page
+     and a command does not. The service worker may probe, or hand this tab a
+     delivery, before a heavy React page has finished settling; a listener that
+     is not there yet is indistinguishable to the caller from a page that has no
+     script on it at all. */
+  chrome.runtime.onMessage.addListener(app.handle_message);
+
+  if (document.readyState === "complete") app.init();
+  else window.addEventListener("load", () => app.init(), { once: true });
+})();

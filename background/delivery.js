@@ -77,7 +77,7 @@ let running = false;
 let delivery_tab_id = null;
 
 export function start_delivery_schedule() {
-  chrome.alarms.create(DRAIN_ALARM, { periodMinutes: DRAIN_PERIOD_MINUTES });
+  chrome.alarms.create(DRAIN_ALARM, { periodInMinutes: DRAIN_PERIOD_MINUTES });
 }
 
 export function is_delivery_alarm(name) {
