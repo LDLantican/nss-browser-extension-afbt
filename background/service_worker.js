@@ -30,6 +30,11 @@ import {
 import { notify, set_badge } from "./notify.js";
 import { normalize_base, origin_pattern } from "./api.js";
 import { fill_job } from "./buildertrend.js";
+import {
+  deliver_now,
+  is_delivery_alarm,
+  start_delivery_schedule,
+} from "./delivery.js";
 
 /**
  * The message out of a payload that may be a bare string.
@@ -69,6 +74,54 @@ const handlers = {
       bt_queue: queue,
       suggested_device_name: auth.suggested_device_name(),
     };
+  },
+
+  /* ---- delivery ---------------------------------------------------------- */
+
+  /**
+   * Work the delivery queue now, rather than waiting for the alarm.
+   *
+   * `manual` reaches deliver_now() so the tab is left open afterwards: somebody
+   * who pressed a button wants to see what happened, and a scheduled run that
+   * left a tab behind every minute would be intolerable.
+   */
+  async DELIVER_NOW() {
+    return deliver_now({ manual: true });
+  },
+
+  /**
+   * Ask the vendor page the manager is looking at what controls it has.
+   *
+   * The cheapest answer to the only thing nobody has been able to check: are
+   * the labels the content script looks for the labels that page actually uses.
+   * It clicks nothing and types nothing, so it is safe to run against a live
+   * client's work order — which matters, because there is no AppFolio sandbox
+   * and the alternative is finding out by submitting something.
+   *
+   * Deliberately the *active* tab rather than the delivery tab. The point is to
+   * inspect a page a person opened and is looking at.
+   */
+  async PROBE_PAGE() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    if (!tab?.id) return { ok: false, error: "No active tab." };
+
+    if (!String(tab.url || "").startsWith("https://vendor.appfolio.com"))
+      return {
+        ok: false,
+        error: "Open an AppFolio vendor work order first, then check this page.",
+      };
+
+    try {
+      const report = await chrome.tabs.sendMessage(tab.id, { type: "VENDOR_PAGE_PROBE" });
+
+      return { ok: true, report };
+    } catch {
+      return {
+        ok: false,
+        error: "That page did not answer. Reload it and try again.",
+      };
+    }
   },
 
   /* ---- settings and sign-in --------------------------------------------- */
@@ -342,6 +395,17 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
    thing that survives the service worker being evicted — which happens after
    thirty seconds of idleness, i.e. during exactly the wait a backoff is. */
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (is_delivery_alarm(alarm.name)) {
+    /* Not awaited and deliberately not reported anywhere. A scheduled run that
+       finds nothing is the normal case, and a run that fails has already said
+       so on the web app's own /deliveries screen — which is where somebody
+       looking for it will look. A notification per empty minute would be
+       noise that teaches people to ignore notifications. */
+    deliver_now();
+
+    return;
+  }
+
   if (alarm.name !== sync.ALARM) return;
 
   sync.trigger();
@@ -357,6 +421,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 async function wake() {
   await migrate_v1_queue();
   await refresh_badge();
+
+  /* Created rather than checked for: chrome.alarms.create replaces an alarm of
+     the same name, so re-arming on every wake is how the schedule survives an
+     update that changed its period. */
+  start_delivery_schedule();
 
   sync.trigger();
 }

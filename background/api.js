@@ -163,6 +163,77 @@ function describe_non_json(status, text) {
   return `Unexpected answer from the web app (${status}): ${text.slice(0, 160)}`;
 }
 
+/**
+ * A photograph's bytes, base64'd so they can cross into a content script.
+ *
+ * Two things force this shape. The bytes have to be fetched *here* rather than
+ * on the page, for the CORS reason at the top of this file — a fetch from a
+ * content script on vendor.appfolio.com would be the page's request, not the
+ * extension's. And a Blob cannot travel over chrome.runtime.sendMessage, which
+ * structured-clones its payload through JSON; so the content script gets a
+ * base64 string and builds its own File out of it.
+ *
+ * Encoded in chunks because String.fromCharCode(...bytes) on a five-megabyte
+ * photograph blows the argument limit and throws a RangeError, which looks
+ * exactly like a corrupt download.
+ *
+ * FileReader would be the obvious way to do this and does not exist in a
+ * Manifest V3 service worker; btoa does.
+ */
+export async function fetch_photo(id) {
+  const base = await base_url();
+  const stored = await auth();
+  const headers = { Accept: "image/*" };
+
+  if (stored?.token) headers.Authorization = `Bearer ${stored.token}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  let response;
+
+  try {
+    response = await fetch(`${base}/api/files/${encodeURIComponent(id)}/full`, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+      credentials: "omit",
+      cache: "no-store",
+    });
+  } catch (error) {
+    throw new NetworkError(
+      error?.name === "AbortError"
+        ? "The web app did not send that photo in time."
+        : "Could not reach the web app for that photo.",
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) return { ok: false, status: response.status, base64: "" };
+
+  const buffer = await response.arrayBuffer();
+
+  return {
+    ok: true,
+    status: response.status,
+    mime_type: response.headers.get("Content-Type") || "image/jpeg",
+    byte_size: buffer.byteLength,
+    base64: to_base64(buffer),
+  };
+}
+
+function to_base64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const CHUNK = 0x8000;
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += CHUNK)
+    binary += String.fromCharCode.apply(null, bytes.subarray(index, index + CHUNK));
+
+  return btoa(binary);
+}
+
 export const api = {
   sign_in: (email, password, device_name) =>
     request("POST", "/api/session", {
@@ -184,4 +255,33 @@ export const api = {
     request("GET", "/api/work-orders/lookup", {
       query: { numbers: numbers.join(",") },
     }),
+
+  /* Delivery. The first calls that ask the web app for work rather than giving
+     it some, so these are the only ones whose *answer* is a queue.
+
+     `submitting` looks like it could be a flag on `result` and must not be. It
+     is the moment after which retrying may bill Camelot twice, so the server
+     has to know about it before the click, not from a browser that may not
+     survive to report anything. */
+  deliveries: (target = "appfolio", limit) =>
+    request("GET", "/api/deliveries", { query: { target, limit } }),
+
+  claim_delivery: (id) =>
+    request("POST", `/api/deliveries/${encodeURIComponent(id)}/claim`),
+
+  submitting_delivery: (id) =>
+    request("POST", `/api/deliveries/${encodeURIComponent(id)}/submitting`),
+
+  delivery_result: (id, result) =>
+    request("POST", `/api/deliveries/${encodeURIComponent(id)}/result`, { body: result }),
+
+  /* The absence of a result. A rehearsal claims a job so two browsers cannot
+     rehearse the same one, then has to leave no trace — a week of rehearsing
+     must not fill the web app's /deliveries screen with failures that never
+     happened. */
+  release_delivery: (id) =>
+    request("POST", `/api/deliveries/${encodeURIComponent(id)}/release`),
+
+  remember_vendor_url: (number, url, target = "appfolio") =>
+    request("POST", "/api/deliveries/url", { body: { number, url, target } }),
 };

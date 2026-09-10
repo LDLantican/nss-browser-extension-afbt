@@ -29,6 +29,9 @@ const els = {
   bt_tally: document.getElementById("bt-tally"),
   bt_jobs: document.getElementById("bt-jobs"),
   bt_actions: document.getElementById("bt-actions"),
+  delivery_tally: document.getElementById("delivery-tally"),
+  delivery_actions: document.getElementById("delivery-actions"),
+  delivery_probe: document.getElementById("delivery-probe"),
   foot_note: document.getElementById("foot-note"),
   open_settings: document.getElementById("open-settings"),
 };
@@ -108,6 +111,7 @@ async function render() {
     : state.session.device_name || "";
 
   render_sync(state);
+  render_delivery();
   render_bt(state);
 
   const stamp = state.session.checked_at
@@ -127,6 +131,162 @@ async function render() {
   } else {
     say("");
   }
+}
+
+/**
+ * The page probe's answer, as something a person can read or screenshot.
+ *
+ * Plain text on purpose. The whole reason it exists is to be sent to whoever
+ * can compare it against what the content script looks for, and a tidy list of
+ * found/not-found lines survives a screenshot or a chat message intact.
+ */
+function describe_probe(report) {
+  const tick = (value) => (value ? "found  " : "MISSING");
+  const lines = [];
+
+  lines.push(`page   : ${report.state === "signed_out" ? "SIGNED OUT" : "ready"}`);
+  if (report.number) lines.push(`number : ${report.number}`);
+  lines.push("");
+  lines.push("buttons");
+
+  for (const [key, found] of Object.entries(report.controls || {}))
+    lines.push(`  ${tick(found)}  ${key.replace(/_/g, " ")}`);
+
+  lines.push("");
+  lines.push("invoice item fields");
+
+  for (const [key, found] of Object.entries(report.fields || {}))
+    lines.push(`  ${tick(found)}  ${key}`);
+
+  lines.push("");
+  lines.push(`item rows detected : ${report.item_rows ?? 0}`);
+  lines.push(`file inputs        : ${report.file_inputs ?? 0}`);
+  lines.push(`text areas         : ${report.textareas ?? 0}`);
+
+  if (report.hint) {
+    lines.push("");
+    lines.push(report.hint);
+  }
+
+  return lines.join("\n");
+}
+
+/** What a rehearsal saw, per job. */
+function describe_reports(reports) {
+  if (reports.length === 0) return "Nothing was waiting to be rehearsed.";
+
+  return reports
+    .map((entry) => {
+      const head = `${entry.number}: ${entry.ok ? "OK" : "STOPPED"}`;
+
+      if (entry.ok)
+        return `${head}\n  expected  ${entry.expected}\n  page said ${entry.read_back}`;
+
+      return `${head}\n  ${entry.error || "no reason given"}`;
+    })
+    .join("\n\n");
+}
+
+/**
+ * Delivering approved work back to the Appfolio vendor portal.
+ *
+ * Deliberately stateless, unlike the two panels either side of it. Those render
+ * from a ledger this extension keeps; the delivery queue lives in the web app,
+ * and asking for it on every popup open would be a network round trip to
+ * display a number nobody is waiting on — delivery runs on a one-minute alarm
+ * whether or not anybody is looking.
+ *
+ * So this panel is a button and an explanation. The button exists for the
+ * manager who has just approved something and does not want to wait a minute,
+ * and for anybody testing that the whole path works.
+ */
+function render_delivery() {
+  els.delivery_tally.textContent =
+    "Approved work is delivered to Appfolio automatically, about once a minute.";
+
+  els.delivery_actions.innerHTML = "";
+
+  /* First, because until somebody has run it nobody knows whether the rest
+     works. It reads a vendor page and touches nothing on it. */
+  els.delivery_actions.appendChild(
+    button("Check this page", "btn btn--quiet", async (event) => {
+      const pressed = event.currentTarget;
+
+      pressed.disabled = true;
+
+      const result = await ask("PROBE_PAGE");
+
+      pressed.disabled = false;
+
+      if (result.ok === false) {
+        els.delivery_probe.hidden = true;
+        say(result.error || "Could not read that page.", "warn");
+
+        return;
+      }
+
+      say("");
+      els.delivery_probe.hidden = false;
+      els.delivery_probe.textContent = describe_probe(result.report || {});
+    }),
+  );
+
+  els.delivery_actions.appendChild(
+    button("Deliver now", "btn btn--quiet", async (event) => {
+      const pressed = event.currentTarget;
+
+      pressed.disabled = true;
+      pressed.textContent = "Delivering.";
+
+      const result = await ask("DELIVER_NOW");
+
+      pressed.disabled = false;
+      pressed.textContent = "Deliver now";
+
+      if (result.ok === false) {
+        say(result.error === "vendor_signed_out"
+          ? "Sign in to vendor.appfolio.com, then try again."
+          : result.error || "Delivery could not run.", "error");
+
+        return;
+      }
+
+      const summary = result.summary || {};
+
+      if (summary.paused === true) {
+        say(summary.reason || "Delivery is paused because too much has failed recently.", "warn");
+
+        return;
+      }
+
+      /* A rehearsal's whole output is what it found, so it goes in the probe
+         block rather than being compressed into the one-line notice. */
+      if (summary.dry_run === true) {
+        els.delivery_probe.hidden = false;
+        els.delivery_probe.textContent = describe_reports(result.reports || []);
+
+        say(
+          summary.rehearsed
+            ? "Rehearsed without writing anything. Nothing was submitted."
+            : "Rehearsal stopped early - see below.",
+          summary.rehearsed ? "ok" : "warn",
+        );
+
+        return;
+      }
+
+      const parts = [
+        summary.delivered ? `${summary.delivered} delivered` : "",
+        summary.unconfirmed ? `${summary.unconfirmed} need checking` : "",
+        summary.failed ? `${summary.failed} failed` : "",
+      ].filter(Boolean);
+
+      say(
+        parts.length === 0 ? "Nothing was waiting to be delivered." : parts.join(" \u00b7 "),
+        summary.unconfirmed || summary.failed ? "warn" : "ok",
+      );
+    }),
+  );
 }
 
 function render_sync(state) {

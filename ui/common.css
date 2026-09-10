@@ -190,6 +190,21 @@ button:disabled {
   font-size: 12px;
 }
 
+/* The page probe's answer. A <pre> because it is a list of found/not-found
+   pairs somebody is going to read line by line or screenshot, and because the
+   whole point of it is to be copied somewhere else verbatim. */
+.probe {
+  margin: 0 0 0.5rem;
+  padding: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 4px;
+}
+
 .notice--ok {
   background: var(--good-soft);
   border-color: #6ee7b7;
