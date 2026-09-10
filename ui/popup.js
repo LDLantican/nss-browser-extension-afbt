@@ -136,39 +136,49 @@ async function render() {
 /**
  * The page probe's answer, as something a person can read or screenshot.
  *
- * Plain text on purpose. The whole reason it exists is to be sent to whoever
+ * Plain text on purpose. Its whole reason for existing is to be sent to whoever
  * can compare it against what the content script looks for, and a tidy list of
- * found/not-found lines survives a screenshot or a chat message intact.
+ * found/missing lines survives a screenshot or a chat message intact.
+ *
+ * Only the hooks that *should* be on this page are checked, because every page
+ * holds about a quarter of the selector map and a reader cannot tell an expected
+ * zero from a broken selector. 
  */
 function describe_probe(report) {
-  const tick = (value) => (value ? "found  " : "MISSING");
   const lines = [];
+  const money = (cents) =>
+    cents === null || cents === undefined ? "none" : `$${(cents / 100).toFixed(2)}`;
 
-  lines.push(`page   : ${report.state === "signed_out" ? "SIGNED OUT" : "ready"}`);
-  if (report.number) lines.push(`number : ${report.number}`);
-  lines.push("");
-  lines.push("buttons");
+  lines.push(`page    : ${report.page || "?"}${report.state === "signed_out" ? "  (SIGNED OUT)" : ""}`);
+  if (report.number) lines.push(`number  : ${report.number}`);
+  if (report.status) lines.push(`status  : ${report.status}`);
+  lines.push(`limit   : ${money(report.maintenance_limit_cents)}`);
+  lines.push(`invoiced: ${report.already_invoiced ? "YES" : "no"}`);
 
-  for (const [key, found] of Object.entries(report.controls || {}))
-    lines.push(`  ${tick(found)}  ${key.replace(/_/g, " ")}`);
+  const expected = report.expected || [];
+  const found = report.found || {};
 
-  lines.push("");
-  lines.push("invoice item fields");
+  if (expected.length > 0) {
+    lines.push("");
+    lines.push("hooks this page should have");
 
-  for (const [key, found] of Object.entries(report.fields || {}))
-    lines.push(`  ${tick(found)}  ${key}`);
+    for (const key of expected)
+      lines.push(
+        `  ${found[key] > 0 ? "found  " : "MISSING"}  ${key.replace(/_/g, " ")}  (${found[key] ?? 0})`,
+      );
 
-  lines.push("");
-  lines.push(`item rows detected : ${report.item_rows ?? 0}`);
-  lines.push(`file inputs        : ${report.file_inputs ?? 0}`);
-  lines.push(`text areas         : ${report.textareas ?? 0}`);
+    if ((report.missing || []).length === 0) {
+      lines.push("");
+      lines.push("all present.");
+    }
+  }
 
   if (report.hint) {
     lines.push("");
     lines.push(report.hint);
   }
 
-  return lines.join("\n");
+  return lines.join(String.fromCharCode(10));
 }
 
 /** What a rehearsal saw, per job. */
