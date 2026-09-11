@@ -150,6 +150,12 @@ function describe_probe(report) {
     cents === null || cents === undefined ? "none" : `$${(cents / 100).toFixed(2)}`;
 
   lines.push(`page    : ${report.page || "?"}${report.state === "signed_out" ? "  (SIGNED OUT)" : ""}`);
+
+  /* First, and unmissable. Every reading under it is taken from the DOM as it
+     stands, and on a half-rendered page that means "" and null and 0 — which
+     is exactly how a blank page used to read as a healthy one. */
+  if (report.loading) lines.push(`loading : YES — readings below are unreliable`);
+  if (report.list_state) lines.push(`list    : ${report.list_state}`);
   if (report.number) lines.push(`number  : ${report.number}`);
   if (report.status) lines.push(`status  : ${report.status}`);
   lines.push(`limit   : ${money(report.maintenance_limit_cents)}`);
@@ -170,6 +176,32 @@ function describe_probe(report) {
     if ((report.missing || []).length === 0) {
       lines.push("");
       lines.push("all present.");
+    }
+  }
+
+  /* The tab walk, which is the whole point of running this on the list page.
+     Two things to read it for: `no status badges` against a tab that has rows
+     means js-summary-status has moved, and that is the single selector the
+     delivery gate classifies on; and a state of `loading` means that tab never
+     finished, which is the reading the first version of this printed as a
+     confident `0 rows`. */
+  if (report.list) {
+    lines.push("");
+    lines.push(`tabs (started on ${report.list.started_on || "?"})`);
+
+    for (const tab of report.list.tabs || []) {
+      const badges = Object.entries(tab.statuses || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([label, count]) => `${label} ${count}`)
+        .join(", ");
+
+      const state = (tab.state || (tab.confirmed ? "loaded" : "loading")).padEnd(8);
+
+      lines.push(`  ${state}  ${tab.label}  ${tab.rows} rows`);
+
+      if (tab.state === "loaded") lines.push(`      ${badges || "NO STATUS BADGES FOUND"}`);
+      else if (tab.state === "filtered") lines.push("      a status filter is excluding every row");
+      else if (tab.state === "loading") lines.push("      never finished loading; nothing was read");
     }
   }
 
@@ -217,16 +249,23 @@ function render_delivery() {
   els.delivery_actions.innerHTML = "";
 
   /* First, because until somebody has run it nobody knows whether the rest
-     works. It reads a vendor page and touches nothing on it. */
+     works. It reads a vendor page and writes nothing on it.
+
+     It takes a label now, like Deliver now does: on the list page it clicks
+     through all three tabs and back, each bounded by the content script's own
+     ten-second budget, so a disabled button with its original text on it looks
+     dead for up to forty seconds. */
   els.delivery_actions.appendChild(
     button("Check this page", "btn btn--quiet", async (event) => {
       const pressed = event.currentTarget;
 
       pressed.disabled = true;
+      pressed.textContent = "Checking.";
 
       const result = await ask("PROBE_PAGE");
 
       pressed.disabled = false;
+      pressed.textContent = "Check this page";
 
       if (result.ok === false) {
         els.delivery_probe.hidden = true;
@@ -285,15 +324,28 @@ function render_delivery() {
         return;
       }
 
+      /* `held back` matches config/work_orders.php's label for the same state.
+         It was missing here, which meant a run that refused five jobs and
+         delivered none said "Nothing was waiting to be delivered." — and the
+         tab gate above makes a refusal the ordinary outcome for an
+         already-invoiced job, so it would have become the common lie. */
       const parts = [
         summary.delivered ? `${summary.delivered} delivered` : "",
         summary.unconfirmed ? `${summary.unconfirmed} need checking` : "",
+        summary.blocked ? `${summary.blocked} held back` : "",
         summary.failed ? `${summary.failed} failed` : "",
+
+        /* Step E is deliberately not fatal, so these jobs are billed and
+           correct — they are just still sitting on In Progress in AppFolio,
+           which is somebody's tidying rather than anybody's money. Reported
+           here because this is the only place it can be: a delivered row's
+           last_error is nulled, so the server has nowhere to keep it. */
+        summary.left_open ? `${summary.left_open} still In Progress` : "",
       ].filter(Boolean);
 
       say(
         parts.length === 0 ? "Nothing was waiting to be delivered." : parts.join(" \u00b7 "),
-        summary.unconfirmed || summary.failed ? "warn" : "ok",
+        summary.unconfirmed || summary.failed || summary.blocked ? "warn" : "ok",
       );
     }),
   );

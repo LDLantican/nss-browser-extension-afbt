@@ -96,7 +96,20 @@ export async function deliver_now({ manual = false } = {}) {
 
   running = true;
 
-  const summary = { delivered: 0, failed: 0, unconfirmed: 0, blocked: 0, skipped: 0, paused: false };
+  const summary = {
+    delivered: 0,
+    failed: 0,
+    unconfirmed: 0,
+    blocked: 0,
+    skipped: 0,
+
+    /* Delivered, but Work Done did not land — so the invoice is in and the job
+       is still sitting on In Progress in AppFolio. Counted alongside
+       `delivered` rather than instead of it, because it is not a money problem
+       and must not read like one. */
+    left_open: 0,
+    paused: false,
+  };
   const reports = [];
 
   try {
@@ -130,7 +143,10 @@ export async function deliver_now({ manual = false } = {}) {
         const outcome = await deliver_one(delivery, options, reports);
 
         if (outcome === "delivered") summary.delivered += 1;
-        else if (outcome === "unconfirmed") summary.unconfirmed += 1;
+        else if (outcome === "delivered_open") {
+          summary.delivered += 1;
+          summary.left_open += 1;
+        } else if (outcome === "unconfirmed") summary.unconfirmed += 1;
         else if (outcome === "blocked") summary.blocked += 1;
         else if (outcome === "skipped") summary.skipped += 1;
         else if (outcome === "rehearsed") summary.rehearsed = (summary.rehearsed || 0) + 1;
@@ -205,8 +221,19 @@ async function deliver_one(delivery, options, reports) {
     );
 
   /* Remembered for next time, so a job found by scanning the list is found
-     directly afterwards. */
+     directly afterwards. Worth keeping even for a job about to be refused: the
+     URL is correct whatever the portal thinks of the job's state. */
   if (!delivery.target_url && url) api.remember_vendor_url(delivery.number, url).catch(() => null);
+
+  /* ---- the portal's own verdict ---------------------------------------- */
+
+  /* Deliberately here: after the URL is banked and before step B clicks
+     anything. Every path through this function passes this point, because
+     locate() is the only way to get `url` and `url` is the only thing steps B
+     through E act on. */
+  const refusal = portal_refusal(delivery, located);
+
+  if (refusal !== null) return finish("blocked", refusal);
 
   /* ---- B: accept, if nobody has ---------------------------------------- */
 
@@ -214,7 +241,7 @@ async function deliver_one(delivery, options, reports) {
     const accepted = await command(url, "VENDOR_ACCEPT", {});
 
     if (accepted?.ok !== true)
-      return finish("blocked", accepted?.error || "That work order has not been accepted yet.");
+      return finish("failed", accepted?.error || "That work order could not be accepted.");
   }
 
   /* ---- C: the photographs ---------------------------------------------- */
@@ -272,10 +299,116 @@ async function deliver_one(delivery, options, reports) {
 
   /* Deliberately not fatal. The money is the delivery, and a job left In
      Progress with a correct invoice on it is untidy — reporting it as failed
-     would invite a retry, and the retry would submit the invoice again. */
-  await command(url, "VENDOR_WORK_DONE", {}).catch(() => null);
+     would invite a retry, and the retry would submit the invoice again.
 
-  return finish("delivered", "", { external_ref: invoice.external_ref || "" });
+     Not fatal is not the same as not worth knowing, though, and this used to
+     be discarded entirely: the step had no wait and no confirmation, so it
+     probably missed often and nothing anywhere would have said so. The
+     outcome now rides back on the result for the popup to total up. It is
+     deliberately not sent to the server — mark_delivered() nulls last_error,
+     so there is nowhere honest to put it, and inventing a field to carry a
+     non-failure is worse than reporting it where somebody is already looking. */
+  const done = await command(url, "VENDOR_WORK_DONE", {}).catch(() => null);
+
+  return finish("delivered", "", {
+    external_ref: invoice.external_ref || "",
+    work_done: done?.ok === true,
+  });
+}
+
+/**
+ * When a delivery may be refused outright.
+ *
+ * `blocked` is irreversible by machine: nothing retries it, it does not count
+ * toward the circuit breaker, and it waits for a person on /deliveries. So it
+ * is asserted only for something actually **seen** — a settled status badge,
+ * the Estimates tab, an invoice AppFolio already holds, a total over the
+ * property's limit, a job that arrived with no expected total. Never for a
+ * failure to see: a number found on no tab and a missing Accept button are
+ * both `failed`, which retries, because nothing was written either way.
+ *
+ * This reverses an earlier version that called a clean-looking miss `blocked`.
+ * The reasoning was that three tabs read without error is evidence about the
+ * number — and it was, until a tab could report itself read when it was still
+ * a skeleton. Then a job sitting in plain sight on In Progress was permanently
+ * refused by a sentence that named the tabs it had supposedly searched. An
+ * inference about what is absent is not an observation.
+ */
+
+/**
+ * The portal statuses that mean there is nothing left to invoice.
+ *
+ * A deny-list of the terminal words, not an allow-list of the good ones, and an
+ * unrecognised status proceeds. That is the opposite of this file's usual
+ * direction and it is deliberate. The guard that protects money is
+ * already_invoiced() on the invoices page, which is keyed on the *absence* of
+ * one fixed sentence and so fails closed by construction; this one's job is
+ * cheaper — stop burning attempts, photo notes and circuit-breaker budget on
+ * jobs AppFolio has already paid for. An allow-list here would turn one
+ * reworded badge into every job refused; a deny-list turns a new terminal word
+ * into one job reaching the invoices page and being refused there instead.
+ *
+ * And the vocabulary is known to be incomplete: the saved Completed capture
+ * holds `Payment Sent`, `Payment Pending` and `Under Review` but no
+ * `Needs Invoice` and no `Closed` row, so the filter dropdown is the only
+ * evidence for two of these five. Treating that as closed would be a guess.
+ */
+const SETTLED_STATUSES = ["under review", "payment pending", "payment sent", "closed"];
+
+/**
+ * Why this job should not be invoiced, or null to go ahead.
+ *
+ * Reads the *list row's* badge first, because that is the one word that is
+ * certainly about this job: it came off the row whose number matched, whereas
+ * the tab is an inference about which panel was rendered when the row was read,
+ * and a tab switch that did not confirm can be wrong about it.
+ *
+ * `Needs Invoice` is not in here, and that is the whole point of reading the
+ * Completed tab: a job sitting there needing an invoice is exactly the job this
+ * queue exists to serve.
+ */
+function portal_refusal(delivery, located) {
+  /* Collapsed here as well as in the content script, because the two arms of
+     locate() clean their status to different degrees: a list badge comes
+     through badge_text(), which collapses, but the detail page's comes through
+     app.text(), which only trims — and that is the arm where the badge is
+     absent and this string is the only signal there is. A stray double space
+     inside `Payment  Sent` must not read as an unrecognised status. */
+  const collapse = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const list_status = collapse(located.list_status);
+  const status = list_status || collapse(located.status);
+  const settled = SETTLED_STATUSES.includes(status.toLowerCase());
+
+  if (settled)
+    return `AppFolio has work order ${delivery.number} as "${status}"`
+      + `${located.list_tab === "completed" ? " on the Completed tab" : ""}`
+      + ", so there is nothing left to invoice. Nothing was touched.";
+
+  /* The Estimates tab is not a slower route to the same job, it is a different
+     kind of thing. A job being invoiced has already been done; an estimate is a
+     price nobody has agreed to. */
+  if (located.list_tab === "estimates")
+    return `AppFolio has work order ${delivery.number} on the Estimates tab`
+      + `${status === "" ? "" : ` as "${status}"`}`
+      + ", which is a quote rather than work to invoice. Nothing was touched.";
+
+  /* `Accept/Reject` is the one badge that appears on two tabs, and the two mean
+     opposite things. On In Progress it is the work order waiting to be
+     accepted, which step B handles and which appfolio_vendor_invoice.js argues
+     is safe because the work demonstrably happened. On Estimates it is a
+     *price* waiting to be accepted, and that argument does not carry — taking
+     it would commit ASH to a figure nobody here has seen. So it proceeds only
+     when the tab is known to be In Progress.
+
+     Guarded on list_status being non-empty because the detail-page arm of
+     locate() has no tab at all, and refusing every Accept/Reject reached by a
+     remembered URL would be a new way to fail at what already works. */
+  if (/accept/i.test(status) && list_status !== "" && located.list_tab !== "in_progress")
+    return `AppFolio shows work order ${delivery.number} as "${status}" on the `
+      + `${located.list_tab || "unknown"} tab, and only In Progress work is accepted `
+      + "automatically. Nothing was touched.";
+
+  return null;
 }
 
 /**
@@ -297,7 +430,16 @@ async function locate(delivery) {
         ok: true,
         url: inspected.url || delivery.target_url,
         number: inspected.number || "",
+        status: inspected.status || "",
         needs_accepting: inspected.needs_accepting === true,
+
+        /* No list was read on this path, so there is no badge and no tab. That
+           is not a gap to paper over: portal_refusal() falls back to the
+           detail page's own status, and the already-invoiced guard on the
+           invoices page is what it has always been backed by. */
+        list_tab: "",
+        list_status: "",
+        tabs: [],
       };
 
     /* A stale URL is not a dead end — fall through to the list. */
@@ -322,7 +464,15 @@ async function locate(delivery) {
     ok: true,
     url: inspected.url || found.href,
     number: inspected.number || "",
+    status: inspected.status || "",
     needs_accepting: inspected.needs_accepting === true,
+
+    /* Transient. Nothing persists these — the list row is gone by the next
+       page load, and work_order_deliveries holds only target_url. They exist to
+       be classified below and then to become prose in last_error. */
+    list_tab: found.list_tab || "",
+    list_status: found.list_status || "",
+    tabs: Array.isArray(found.tabs) ? found.tabs : [],
   };
 }
 
@@ -372,6 +522,14 @@ async function report(delivery, options, reports, state, error, extra = {}) {
 
     await api.release_delivery(delivery.id).catch(() => null);
 
+    /* A refusal is still a refusal in a rehearsal, and saying so is the point
+       of rehearsing: a job the portal's verdict turns away here is a job a live
+       run turns away identically, so calling it `failed` would have the very
+       first rehearsal report failures against a system working exactly right.
+       The release above is unchanged — nothing was written and the attempt is
+       refunded either way; only the word in the tally moves. */
+    if (options.dry_run && state === "blocked") return "blocked";
+
     return state === "dry_run" ? "rehearsed" : "failed";
   }
 
@@ -384,7 +542,14 @@ async function report(delivery, options, reports, state, error, extra = {}) {
     })
     .catch(() => null);
 
-  return extra.signed_out === true ? "signed_out" : state;
+  if (extra.signed_out === true) return "signed_out";
+
+  /* `delivered_open` is not a delivery state and never reaches the server —
+     the result was posted as `delivered` just above, which is what it is. It
+     exists only so deliver_now can total the jobs whose Work Done click did
+     not land, since a delivered row's last_error is nulled and the server has
+     nowhere to keep a note about a non-failure. */
+  return state === "delivered" && extra.work_done === false ? "delivered_open" : state;
 }
 
 /**

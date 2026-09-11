@@ -65,16 +65,68 @@
      * each belongs to, because the handlers below are grouped the same way.
      */
     SELECTORS: {
+      /* whether anything at all has finished loading
+         --------------------------------------------------------------------
+         Two different loading states, verified against captures of both in
+         storage/temporary-items/ (`spinner` and `skeleton list`).
+
+         `loading` is the whole-page spinner a navigation shows: it replaces
+         every child of #property-content, so during it there is no nav, no
+         number, no anything. role/aria-label rather than a class because an
+         accessibility contract is the least likely thing on the page to be
+         renamed — and .gears-spinner, its unhashed class, is the fallback.
+
+         `list_placeholder` is the shimmer the list shows when a tab is
+         clicked. Its class is a CSS module, so the trailing five characters
+         are a BUILD HASH and change on every AppFolio deploy: match the
+         component prefix, never the whole string. */
+      loading: "[role='status'][aria-label='loading'], .gears-spinner",
+      list_placeholder: "[class*='WorkOrderListPlaceholder_']",
+
+      /* Portal furniture, outside #property-content and so present whatever
+         the content is doing. Only the probe uses these, to tell "the portal
+         is up and this is a page I do not recognise" from "there is nothing
+         here at all". */
+      navbar: ".js-navbar",
+      universal_search: ".js-universal-search",
+
       /* the list at / */
+      /* Also the list's readiness signal, which is why nothing here needs a
+         skeleton class to know the rows have arrived. AppFolio adds this hook
+         only when it renders real rows: the skeleton capture's container is
+         `WorkOrderList_work_order_list__container__pYHFZ` and the settled
+         one's is `js-work-orders WorkOrderList_work_order_list__container__…`.
+         So hook absent means loading, and hook present with no rows means the
+         tab really is empty. */
       list: ".js-work-orders",
       list_row: ".js-work-orders a[href*='/workOrders/']",
       /* NOT unique to a list row — the same class heads "Submitted Invoices",
          "Job Details" and "Submit New Invoice". It is only ever queried inside
          one row's <a>, never against the document. */
       list_row_number: "h2.card-title",
+      /* A list row's status badge — `Needs Invoice`, `Under Review`,
+         `Payment Sent`. NOT span.js-work-order-status: that is the detail
+         page's hook and the two are different vocabularies. Queried inside one
+         row's <a> for the same reason the number is. */
+      list_row_status: "span.js-summary-status",
       tab_in_progress: ".js-nav-in-progress a",
       tab_estimates: ".js-nav-estimated a",
       tab_completed: ".js-nav-completed a",
+      /* The per-tab status filter, and the Clear Filters button beside it.
+         The option set differs per tab, but it is a HARDCODED per-tab list,
+         not a summary of the rows: Completed offers `Closed` and
+         `Needs Invoice` with no such rows in the capture, and Estimates has
+         four `Accept/Reject` rows with no such option. So it says which tab's
+         shell is up and says nothing about whether the data has arrived --
+         the skeleton capture already has all five of Completed's options.
+         An earlier version watched it for exactly that and was wrong.
+
+         Clear Filters ships `disabled` when nothing is filtered, so an
+         ENABLED one plus zero rows means "filtered to nothing" rather than
+         "this tab is empty". */
+      status_filter: "select.js-status-input",
+      status_filter_option: "select.js-status-input option",
+      clear_filters: "button.js-clear-filters",
 
       /* a work order */
       number: "span.js-work-order-number-display",
@@ -91,6 +143,7 @@
       pending_actions: "[class*='work-order-pending-actions']",
 
       /* the notes page */
+      notes_container: "div.js-notes",
       note_field: "textarea.js-note-field",
       note_dropzone: "#react-dropzone",
       note_file_input: "#react-dropzone input[name='file-input-field']",
@@ -98,6 +151,12 @@
       notes_list: "div.js-notes-list",
 
       /* the invoices page */
+      invoices_container: ".js-invoices",
+      /* The limit, where it actually gates a submit. maintenance_limit_cents()
+         used to reach this page's figure only through a prose regex over
+         document.body.innerText — .js-maintenance-limit and .js-datapair are
+         work-order-detail furniture and neither is on the invoices page. */
+      invoices_limit_alert: ".js-invoices-maintenance-limit-alert",
       create_invoice: "button.js-create-invoice-btn",
       description: "input.js-description-field",
       quantity: "input.js-quantity-field",
@@ -115,13 +174,69 @@
     /** How long a control may take to appear after a click. */
     WAIT_MS: 15000,
 
-    init() {
+    /**
+     * How long a freshly navigated page may take to bring its data in.
+     *
+     * Its own budget because it is paid before every command rather than after
+     * a click, and because a timeout here is a *failure* — so it should be
+     * generous. The portal settles in one to two seconds on a good connection,
+     * but that is network-bound and not a number to design against.
+     */
+    READY_MS: 15000,
+
+    /**
+     * The three tabs, in the order a delivery should look.
+     *
+     * In Progress first because it is what `/` renders on a fresh load, so the
+     * common case clicks nothing. Completed second because that is where the
+     * jobs this extension exists for actually live — pressing Work Done moves
+     * a job off In Progress and onto Completed as `Needs Invoice`. Estimates
+     * last because a job being invoiced has no business there at all, and
+     * finding one there is a refusal rather than a destination.
+     *
+     * All three <a> elements are always in the DOM. It is the other tabs'
+     * *rows* that are not there until clicked.
+     */
+    TABS: [
+      { key: "in_progress", label: "In Progress", nav: "tab_in_progress" },
+      { key: "completed", label: "Completed", nav: "tab_completed" },
+      { key: "estimates", label: "Estimates", nav: "tab_estimates" },
+    ],
+
+    /**
+     * How long one tab may take to render.
+     *
+     * Its own budget rather than WAIT_MS, because this one is paid on the
+     * *miss* path: a number that is genuinely nowhere waits out every tab it
+     * visits, and at WAIT_MS that is forty-five seconds added to a job that
+     * was going to be refused anyway, times however many are in the queue. Ten
+     * seconds covers the 109-row Completed render in the saved captures.
+     */
+    TAB_WAIT_MS: 10000,
+
+    async init() {
       /* Remembered whenever a person is on a vendor work order, because that is
          the only moment the web app can learn this page's address — the
-         displayed number cannot be turned into a URL. Fire and forget. */
+         displayed number cannot be turned into a URL. Fire and forget.
+
+         The pathname is checked first so a list page does not sit out the
+         readiness budget for a message it was never going to send. Then it
+         waits, for the same reason everything else does: this used to read the
+         number at `window load`, which is the document and not the data, and
+         fall back to document.title when the hook had not rendered. Both ends
+         of that were wrong. The title can still name the *previous* work order
+         after a client-side route change, so this would bank number A against
+         work order B — poisoning the one field the whole fast path depends on;
+         and without the fallback, an unwaited read simply sends nothing, so
+         target_url is never learned and every delivery walks the tabs. Waiting
+         is what makes dropping the fallback an improvement rather than a
+         trade. */
+      if (!/\/workOrders\/\d+/.test(location.pathname)) return;
+      if (!(await app.await_ready())) return;
+
       const number = app.page_number();
 
-      if (number !== "" && /\/workOrders\/\d+/.test(location.pathname))
+      if (number !== "")
         chrome.runtime.sendMessage({
           type: "VENDOR_PAGE_SEEN",
           payload: { number, url: app.work_order_url() },
@@ -151,8 +266,43 @@
 
       if (!handler) return false;
 
-      Promise.resolve()
-        .then(handler)
+      /**
+       * Nothing reads a page that has not finished loading.
+       *
+       * Here rather than in each handler, because there is one funnel and
+       * seven things that would each have to remember. Every command below
+       * used to be handed a page whose chrome was up and whose data was in
+       * flight, where "" and null and 0 are what the DOM answers and every
+       * guard in this file reads those as permission to proceed.
+       *
+       * Two exemptions, for opposite reasons.
+       *
+       * VENDOR_PAGE_STATUS is the liveness handshake delivery.js retries, and
+       * a slow page that stopped answering it is indistinguishable from a page
+       * with no script on it at all.
+       *
+       * VENDOR_PAGE_PROBE is the tool for diagnosing a page nothing else can
+       * read — including the case where AppFolio has renamed the very hook
+       * readiness is waiting for. Gate it and the one instrument that would
+       * show you that refuses to report it. It answers with `loading` and
+       * `list_state` instead, and says in its hint when its own readings are
+       * not to be trusted.
+       */
+      const ungated = message.type === "VENDOR_PAGE_STATUS" || message.type === "VENDOR_PAGE_PROBE";
+
+      const gated = ungated
+        ? Promise.resolve().then(handler)
+        : app.await_ready().then((ready) =>
+            ready
+              ? handler()
+              : {
+                  ok: false,
+                  error: `That page did not finish loading in ${app.READY_MS / 1000} seconds, `
+                    + "so nothing was read from it.",
+                },
+          );
+
+      gated
         .then((result) => respond(result))
         .catch((error) =>
           respond({ ok: false, error: error?.message || "That page could not be read." }),
@@ -164,14 +314,20 @@
     /* ---- the commands --------------------------------------------------- */
 
     /**
-     * What this page has, touching nothing.
+     * What this page has, writing nothing.
      *
      * Safe against a live client's work order, which is the point: ASH has no
      * AppFolio sandbox, so the alternative to a passive check is finding out by
-     * submitting something. It reports per hook rather than per label now, so
-     * the answer names the thing to fix.
+     * submitting something. It reports per hook rather than per label, so the
+     * answer names the thing to fix.
+     *
+     * On the list it does click, through all three tabs and back again — the
+     * one thing here that is not purely a read. It is still nothing a person
+     * could not do with a mouse, and it is the only way to see the other tabs
+     * at all, because their rows are not in the DOM until clicked. Nothing on
+     * any work order is written, which is the promise that matters.
      */
-    probe() {
+    async probe() {
       const found = {};
 
       for (const [key, selector] of Object.entries(app.SELECTORS))
@@ -183,12 +339,27 @@
          mostly zeroes, because every page holds a quarter of the map — and a
          reader cannot tell an expected zero from a broken selector. */
       const expected = {
-        list: ["list", "list_row", "tab_in_progress"],
+        list: [
+          "list",
+          "list_row",
+          "list_row_status",
+          "tab_in_progress",
+          "tab_completed",
+          "tab_estimates",
+          "status_filter",
+        ],
         work_order: ["number", "status", "work_done", "notes_button", "invoices_button", "datapair"],
-        notes: ["note_field", "note_dropzone", "note_file_input", "note_save", "notes_list"],
+        notes: ["notes_container", "note_field", "note_dropzone", "note_file_input", "note_save", "notes_list"],
         invoices: found.description > 0
-          ? ["number", "description", "quantity", "rate", "amount", "submit_toolbar"]
-          : ["number", "create_invoice"],
+          ? ["number", "invoices_container", "description", "quantity", "rate", "amount", "submit_toolbar"]
+          : ["number", "invoices_container", "create_invoice"],
+
+        /* An unknown page used to yield no expected list, so `missing` was
+           empty and the report ended with "all present." — on a page holding
+           nothing at all. The one tool for telling a loaded page from a blank
+           one could not tell them apart. These two are portal chrome, so both
+           missing means not even the shell is there. */
+        unknown: ["navbar", "universal_search"],
       }[page] || [];
 
       return {
@@ -196,10 +367,19 @@
         state: app.read_state(),
         url: location.href,
         page,
+
+        /* Reported rather than waited out, because probe() is the one command
+           the readiness gate lets through either way: a person pressing Check
+           this page on a stuck portal needs to be told it is stuck, not handed
+           a timeout. */
+        loading: app.loading(),
+        list_state: page === "list" ? app.list_state() : "",
         number: app.page_number(),
         status: app.text(app.SELECTORS.status),
         maintenance_limit_cents: app.maintenance_limit_cents(),
         already_invoiced: app.already_invoiced(),
+        active_tab: app.active_tab(),
+        list: page === "list" ? await app.survey_tabs() : null,
         expected,
         missing: expected.filter((key) => found[key] === 0),
         found,
@@ -208,7 +388,9 @@
             ? "This is the invoices page before the form opens. Click Create Invoice, then check again."
             : page === "unknown"
               ? "This does not look like a work order, a notes page, an invoices page or the list."
-              : "",
+              : app.loading()
+                ? "This page is still loading. Nothing below is a reliable reading of it."
+                : "",
       };
     },
 
@@ -219,19 +401,29 @@
      * way to get from `#19207 - 1` to `/2433121/workOrders/19633` — the two ids
      * are unrelated.
      */
-    inspect(job) {
+    async inspect(job) {
       if (app.read_state() === "signed_out") return { ok: false, signed_out: true };
 
       if (app.page_kind() === "list") {
-        const href = app.find_in_list(job.number || "");
+        const found = await app.find_in_list(job.number || "");
 
         return {
-          ok: href !== null,
+          ok: found.href !== null,
           page: "list",
-          href,
-          error: href === null
-            ? `Work order ${job.number} is not in the portal list. It may be on another tab, or not assigned yet.`
-            : "",
+          href: found.href,
+
+          /* Transient, and named apart from the `status` the work-order arm
+             below returns: one message type, two shapes, and locate() reads
+             both. This one is the list badge (`Needs Invoice`, `Payment Sent`),
+             that one is span.js-work-order-status. Neither is ever persisted --
+             the only thing that reaches the server from here is the URL, keyed
+             on the number, by POST /api/deliveries/url. */
+          list_tab: found.tab,
+          list_status: found.status,
+          tabs: found.scanned,
+          searched_all: found.searched_all,
+
+          error: found.href === null ? app.not_found_reason(job.number, found) : "",
         };
       }
 
@@ -247,6 +439,54 @@
     },
 
     /**
+     * Every tab's row count and status badges, by actually clicking through.
+     *
+     * The rehearsal for the tab-switching a delivery now depends on, run
+     * somewhere it cannot cost anything: a tab click is a client-side view
+     * change that writes nothing, exactly what a person does with a mouse. It
+     * is also the only way to see the other tabs at all, since their rows are
+     * not in the DOM until clicked.
+     *
+     * And it is the only check that can tell whether js-summary-status still
+     * reads the words delivery classifies on. A histogram that comes back
+     * `{"(no badge)": 109}` is the warning; a delivery finding out instead is a
+     * queue full of refusals.
+     *
+     * Unlike the delivery path this puts the tab back. "Check this page" runs
+     * against the tab a person is looking at, and moving her view out from
+     * under her and leaving it moved is startling for no gain. A restore that
+     * does not land harms nothing.
+     */
+    async survey_tabs() {
+      const started_on = app.active_tab();
+      const tabs = [];
+
+      for (const tab of app.TABS) {
+        const confirmed = await app.show_tab(tab.key);
+
+        tabs.push({
+          tab: tab.key,
+          label: tab.label,
+          confirmed,
+
+          /* The state, not just the count. A bare `0 rows` was the output that
+             sent everyone looking for a broken selector when the real answer
+             was "asked too early" — and it read `ok` while it did it. */
+          state: app.list_state(),
+          rows: document.querySelectorAll(app.SELECTORS.list_row).length,
+          statuses: app.status_histogram(),
+          filter_options: [...document.querySelectorAll(app.SELECTORS.status_filter_option)]
+            .map((option) => option.value)
+            .filter((value) => value !== ""),
+        });
+      }
+
+      if (started_on !== "") await app.show_tab(started_on);
+
+      return { started_on, tabs };
+    },
+
+    /**
      * Accept the work order.
      *
      * Only ever called for a job the web app has already approved, so the work
@@ -258,7 +498,7 @@
       const container = document.querySelector(app.SELECTORS.pending_actions);
 
       if (container === null)
-        return { ok: false, error: "This work order has no Accept button; it may already be accepted." };
+        return { ok: false, error: "Could not find the Accept button on this work order." };
 
       const button = [...container.querySelectorAll("button.btn-success")].find(
         (candidate) => app.clean(candidate.textContent) === "accept",
@@ -358,6 +598,20 @@
 
       const limit = app.maintenance_limit_cents();
       const expected = Number(job.expected_total_cents || 0);
+
+      /* A zero expected total makes every check below vacuous rather than
+         strict: `expected > limit` cannot fire, the cent-exact read-back is
+         satisfied by an empty form reading $0.00 — before React has picked up
+         a single typed rate — and check_lines() passes each line on 0 === 0.
+         So the one number the whole reconciliation is measured against is
+         refused if it is missing, instead of being taken as agreement. */
+      if (expected <= 0)
+        return {
+          ok: false,
+          blocked: true,
+          error: "This job arrived with no expected total, so there is nothing to check an invoice "
+            + "against. Nothing was submitted.",
+        };
 
       if (limit !== null && expected > limit && job.on_over_limit !== "send")
         return {
@@ -460,11 +714,14 @@
       /* Everything past the click reports `unconfirmed` on doubt, never
          `failed`. Save has been pressed and nobody on this side can know
          whether it took. */
-      const done = await app.wait_for(() =>
-        app.already_invoiced() || document.querySelector(app.SELECTORS.description) === null
-          ? true
-          : null,
-      );
+      /* AppFolio holding the invoice, and nothing else. This used to accept
+         `description === null` as well — "the form went away" — which React
+         satisfies by unmounting the input during any re-render, including the
+         ones an error state causes. A submit that did not land then reported
+         `delivered`, which is the one outcome nothing downstream re-examines.
+         Failing to see confirmation now means `unconfirmed`, which is the
+         honest answer and already has a screen of its own. */
+      const done = await app.wait_for(() => (app.already_invoiced() ? true : null));
 
       if (done === null)
         return {
@@ -482,29 +739,153 @@
      * Scoped by class rather than text: the status dropdown carries a menu item
      * with the same words, and clicking that one opens a menu instead.
      */
-    work_done() {
+    async work_done() {
       const button = document.querySelector(app.SELECTORS.work_done);
 
       if (button === null) return { ok: false, error: "Could not find the Work Done button." };
 
+      const before = app.text(app.SELECTORS.status);
+
       button.click();
 
-      return { ok: true };
+      /* Confirmed, where before this returned {ok: true} on an unverified
+         click. It was the only command in the file that neither waited for its
+         control nor checked its effect, and the only one whose result
+         delivery.js discards — so a miss was both likely and permanently
+         invisible. Either signal will do: AppFolio may retire the button, or
+         move the job off Scheduled, and which it does is its business. */
+      const moved = await app.wait_for(() =>
+        document.querySelector(app.SELECTORS.work_done) === null
+        || app.text(app.SELECTORS.status) !== before
+          ? true
+          : null,
+      );
+
+      return moved === null
+        ? { ok: false, error: "Work Done was pressed and the work order did not change." }
+        : { ok: true };
     },
 
     /* ---- reading the page ----------------------------------------------- */
 
+    /**
+     * Which page this is, from the URL alone.
+     *
+     * The list arm used to be `document.querySelector(SELECTORS.list) !== null`
+     * — a *readiness* test wearing a *routing* test's clothes. While the list
+     * was still a skeleton that hook is absent, so this answered "unknown",
+     * inspect() fell through to its work-order arm, and the only thing that
+     * stopped a delivery running against the list page was an accidental
+     * `!found.href` check in locate(). Routing is a URL question; whether the
+     * page can be read is await_ready()'s, below.
+     */
     page_kind() {
       if (/\/workOrders\/\d+\/invoices/.test(location.pathname)) return "invoices";
       if (/\/workOrders\/\d+\/notes/.test(location.pathname)) return "notes";
       if (/\/workOrders\/\d+/.test(location.pathname)) return "work_order";
-      if (document.querySelector(app.SELECTORS.list) !== null) return "list";
+      if (/^\/?$/.test(location.pathname)) return "list";
 
       return "unknown";
     },
 
+    /* ---- has this page's data arrived? ----------------------------------
+       The bug this whole section exists for: every wait_for() in this file
+       confirms something after a *click*, and nothing guarded the first read
+       of a freshly navigated page. delivery.js waits for tab.status ===
+       "complete", which is the document and not the data, and the handshake
+       answers on the first try — so a handler was handed a page with its
+       chrome up and its content still in flight, where every read returns ""
+       or null or 0 and every guard reads those as permission to proceed. */
+
+    /** Whether either loading state is on screen. */
+    loading() {
+      return (
+        document.querySelector(app.SELECTORS.loading) !== null
+        || document.querySelector(app.SELECTORS.list_placeholder) !== null
+      );
+    },
+
+    /**
+     * Whether the list has real rows in it, as opposed to a skeleton.
+     *
+     * One hook, and it is the one this file already used for everything else:
+     * AppFolio only puts `js-work-orders` on the container once it renders
+     * rows. So this needs no knowledge of the shimmer's build-hashed class,
+     * and "no rows" stops being ambiguous — see list_state().
+     */
+    list_ready() {
+      return document.querySelector(app.SELECTORS.list) !== null;
+    },
+
+    /**
+     * loaded / empty / filtered / loading, for the list.
+     *
+     * `filtered` matters because zero rows has two innocent causes and one
+     * alarming one. Clear Filters is disabled when nothing is filtered, so an
+     * enabled one with no rows means somebody's status filter excluded
+     * everything — not that the tab is empty and not that we read too early.
+     */
+    list_state() {
+      if (!app.list_ready()) return "loading";
+      if (document.querySelectorAll(app.SELECTORS.list_row).length > 0) return "loaded";
+
+      const clear = document.querySelector(app.SELECTORS.clear_filters);
+
+      return clear !== null && clear.disabled !== true ? "filtered" : "empty";
+    },
+
+    /**
+     * Whether this page can be read yet.
+     *
+     * Per page, from a datum only the loaded page has — never a timer. Each
+     * was checked against the saved captures: js-work-order-number-display is
+     * on all four non-list pages, js-note-field only on the notes page, and
+     * js-invoices only on the two invoices captures.
+     *
+     * The invoices row is the load-bearing one. already_invoiced() answers
+     * "no" when the Submitted Invoices section is absent, which is true of a
+     * loaded page with no invoice on it and equally true of a page that has
+     * not rendered — so making that section's presence a *precondition* is
+     * what restores the fail-safe its own comment promises. Its logic is
+     * untouched; it was never wrong about a loaded page, only asked about an
+     * empty one.
+     */
+    page_ready() {
+      const kind = app.page_kind();
+
+      if (kind === "list") return app.list_ready();
+      if (kind === "unknown") return false;
+      if (app.loading()) return false;
+      if (app.page_number() === "") return false;
+
+      if (kind === "notes") return document.querySelector(app.SELECTORS.note_field) !== null;
+
+      if (kind === "invoices")
+        return document.querySelector(app.SELECTORS.invoices_container) !== null;
+
+      return true;
+    },
+
+    /** Wait for it, or say plainly that it never arrived. */
+    async await_ready() {
+      if (app.page_ready()) return true;
+
+      return (await app.wait_for(() => (app.page_ready() ? true : null), app.READY_MS)) === true;
+    },
+
+    /**
+     * Signed in, or not.
+     *
+     * The password check goes through visible(), because it used to be a bare
+     * querySelector and *any* password input anywhere in the DOM answered
+     * "signed out" — a password manager's injected field, an account panel, a
+     * modal mounted but not shown. That answer is the most expensive one in
+     * the extension: delivery.js aborts the entire drain on it.
+     */
     read_state() {
-      if (document.querySelector("input[type='password']")) return "signed_out";
+      for (const field of document.querySelectorAll("input[type='password']"))
+        if (app.visible(field)) return "signed_out";
+
       if (/sign in|log in/i.test(document.title || "")) return "signed_out";
 
       return "ready";
@@ -518,10 +899,16 @@
      * the hyphen, and a `#` on one of them. The web app holds `19327-1`. An
      * earlier version matched `\b\d+-\d+\b`, which matches neither, so its
      * wrong-page guard found nothing and skipped itself.
+     *
+     * It also used to fall back to document.title, which on a client-side
+     * route change can still be the *previous* work order — and init() posts
+     * this number with this page's URL to remember_vendor_url, so a stale
+     * title banks number A against work order B and the next delivery for A
+     * opens B. The fallback existed to cover a hook that had not rendered
+     * yet; await_ready() covers that now, so it is gone.
      */
     page_number() {
-      const source = app.text(app.SELECTORS.number) || document.title || "";
-      const match = source.match(/(\d+)\s*-\s*(\d+)/);
+      const match = app.text(app.SELECTORS.number).match(/(\d+)\s*-\s*(\d+)/);
 
       return match ? `${match[1]}-${match[2]}` : "";
     },
@@ -533,12 +920,128 @@
       return match ? `${location.origin}${match[1]}` : location.href;
     },
 
-    /** A number's row in the list, as an absolute URL. */
-    find_in_list(number) {
-      const wanted = app.normalize_number(number);
+    /** Which tab is rendered, as a TABS key. "" when the nav cannot be read. */
+    active_tab() {
+      for (const tab of app.TABS) {
+        const link = document.querySelector(app.SELECTORS[tab.nav]);
 
-      if (wanted === "") return null;
+        if (link !== null && link.classList.contains("active")) return tab.key;
+      }
 
+      return "";
+    },
+
+    /** A tab's own name, for a sentence a person reads. */
+    tab_label(key) {
+      return app.TABS.find((tab) => tab.key === key)?.label || key;
+    },
+
+    /**
+     * Which rows are on screen, as a string.
+     *
+     * Rows only — no tab name, no filter options. Both of those are client
+     * state that flips on the click, before any data is fetched: the saved
+     * skeleton capture already has the nav marked `active`, the <h1> reading
+     * "Completed" and all five of Completed's filter options, with six shimmer
+     * cards where the rows go. An earlier version folded the option set in
+     * here on the theory that it was a data-side signal, and it is not — it
+     * made "the list changed" true the instant a tab was clicked, which is the
+     * exact false positive this exists to prevent.
+     *
+     * A work order appears on exactly one tab, so two tabs can never share a
+     * row and this always moves on a real switch. An empty destination gives
+     * `0::`, which also differs.
+     */
+    list_identity() {
+      const rows = document.querySelectorAll(app.SELECTORS.list_row);
+      const first = rows[0]?.getAttribute("href") || "";
+      const last = rows[rows.length - 1]?.getAttribute("href") || "";
+
+      return `${rows.length}:${first}:${last}`;
+    },
+
+    /** Every row's status badge, counted. For the probe. */
+    status_histogram() {
+      const counts = {};
+
+      for (const row of document.querySelectorAll(app.SELECTORS.list_row)) {
+        const badge = row.querySelector(app.SELECTORS.list_row_status);
+        const label = badge === null ? "(no badge)" : app.badge_text(badge) || "(blank)";
+
+        counts[label] = (counts[label] || 0) + 1;
+      }
+
+      return counts;
+    },
+
+    /**
+     * A badge's words, with its spacing collapsed and its casing kept.
+     *
+     * Not app.clean(), which lowercases: these strings are quoted back to a
+     * person in a refusal and shown in the probe, so `Payment Sent` has to stay
+     * the way AppFolio writes it. The classifier in background/delivery.js does
+     * its own lowercasing when it compares.
+     */
+    badge_text(element) {
+      return String(element?.textContent || "").replace(/\s+/g, " ").trim();
+    },
+
+    /**
+     * Render one of the three tabs.
+     *
+     * The hard part, and it is not the click. The tabs are `<a href="#">` with
+     * no route of their own, so there is no navigation to wait on, no URL
+     * change and no load event — and the nav's `active` class moves on the
+     * click rather than on the data, so waiting for that alone hands the
+     * caller the *previous* tab's rows and a straight face.
+     *
+     * So two conditions, both required: the nav says this tab, and the rows are
+     * not the rows that were there before the click. The second is the real one.
+     *
+     * Returns false rather than throwing when it cannot confirm, because
+     * scanning a stale tab can only ever produce a false *miss* — the match is
+     * on the work order's number and the href comes off the row that matched,
+     * so the wrong tab's rows cannot yield the wrong job. The caller records
+     * which tabs were confirmed and says so when it finds nothing, and that is
+     * what keeps a slow render from being reported as "this job does not exist".
+     */
+    async show_tab(key) {
+      /* Still a wait, even when this tab is already the one showing. It used
+         to return true here on the strength of the nav's `active` class alone,
+         and that is the class this function's own comment calls worthless as a
+         data signal. Two consequences, both seen: `/` renders In Progress with
+         `active` already set while the list is a skeleton, so the first tab of
+         every search was scanned at zero rows; and a person who clicks a tab
+         and presses the button inside the render window gets the *previous*
+         tab's rows counted under the new tab's name. */
+      if (app.active_tab() === key)
+        return (await app.wait_for(() => (app.list_ready() ? true : null), app.TAB_WAIT_MS)) === true;
+
+      const tab = app.TABS.find((candidate) => candidate.key === key);
+      const link = tab ? document.querySelector(app.SELECTORS[tab.nav]) : null;
+
+      if (link === null) return false;
+
+      const before = app.list_identity();
+
+      link.click();
+
+      /* Both conditions, and the second is the real one. `js-work-orders`
+         present means rows rather than shimmer; a moved identity means they
+         are *this* tab's rows and not the ones that were already there. */
+      const landed = await app.wait_for(
+        () =>
+          app.active_tab() === key && app.list_ready() && app.list_identity() !== before
+            ? true
+            : null,
+        app.TAB_WAIT_MS,
+      );
+
+      return landed === true;
+    },
+
+    /** A number's row on the tab rendered now, with its status badge. */
+    scan_tab(wanted) {
       for (const row of document.querySelectorAll(app.SELECTORS.list_row)) {
         const label = row.querySelector(app.SELECTORS.list_row_number);
 
@@ -547,10 +1050,93 @@
 
         const href = row.getAttribute("href") || "";
 
-        return href === "" ? null : new URL(href, location.origin).href;
+        if (href === "") return null;
+
+        return {
+          href: new URL(href, location.origin).href,
+          status: app.badge_text(row.querySelector(app.SELECTORS.list_row_status)),
+        };
       }
 
       return null;
+    },
+
+    /**
+     * A number's row, across all three tabs.
+     *
+     * Why this is no longer one querySelectorAll: `/` renders In Progress, and
+     * the job this extension exists to invoice is the one that has just left
+     * In Progress — pressing Work Done moves it onto Completed as `Needs
+     * Invoice`. So the single most likely job was the single job a one-tab scan
+     * could not find, and background/delivery.js turned that into `failed`,
+     * which counts toward the circuit breaker. Ten of those paused the queue
+     * for everybody.
+     *
+     * The tab already rendered is scanned first whatever it is, because it
+     * costs no click and because the delivery tab is not reloaded between jobs
+     * — same_page() in delivery.js strips the hash, and a tab click leaves the
+     * URL at `/#`, so job two starts wherever job one's search ended. Assuming
+     * In Progress would be wrong from the second job onward.
+     */
+    async find_in_list(number) {
+      const wanted = app.normalize_number(number);
+      const scanned = [];
+
+      if (wanted === "") return { href: null, tab: "", status: "", scanned, searched_all: false };
+
+      const first = app.active_tab();
+      const keys = app.TABS.map((tab) => tab.key);
+      const order = first === "" ? keys : [first, ...keys.filter((key) => key !== first)];
+
+      for (const key of order) {
+        const confirmed = await app.show_tab(key);
+        const rows = document.querySelectorAll(app.SELECTORS.list_row).length;
+
+        /* Scanned even when the switch was not confirmed: a stale panel can
+           only hide a row, never invent one, and the alternative is declining
+           to look at all. */
+        const hit = app.scan_tab(wanted);
+
+        scanned.push({ tab: key, rows, confirmed, hit: hit !== null });
+
+        if (hit !== null)
+          return { href: hit.href, tab: key, status: hit.status, scanned, searched_all: false };
+      }
+
+      return {
+        href: null,
+        tab: "",
+        status: "",
+        scanned,
+        searched_all: scanned.every((entry) => entry.confirmed),
+      };
+    },
+
+    /**
+     * Why a number was not found, specifically enough to act on.
+     *
+     * Three different situations used to wear one sentence — and it guessed
+     * "it may be on another tab", which is now a lie because all three were
+     * looked at. Which situation it is decides whether background/delivery.js
+     * calls this a refusal or a failure, and only a failure counts toward the
+     * circuit breaker, so the counts in here are evidence rather than detail.
+     */
+    not_found_reason(number, found) {
+      const unconfirmed = found.scanned.filter((entry) => !entry.confirmed);
+      const counts = found.scanned
+        .map((entry) => `${app.tab_label(entry.tab)} ${entry.rows}`)
+        .join(", ");
+
+      if (found.scanned.every((entry) => entry.rows === 0))
+        return `The portal list showed no work orders on any tab (${counts}). `
+          + "Either nothing is assigned, or AppFolio's list markup has moved.";
+
+      if (unconfirmed.length > 0)
+        return `Work order ${number} was not found, and the `
+          + `${unconfirmed.map((entry) => app.tab_label(entry.tab)).join(" and ")} tab did not `
+          + `finish rendering in time, so it could not be searched properly (${counts}).`;
+
+      return `Work order ${number} is on none of the portal's three tabs (${counts}).`;
     },
 
     /** `#19207 - 1, Camelot Properties, LLC` and `19207-1` to the same thing. */
@@ -571,6 +1157,16 @@
       const direct = app.to_cents(hook);
 
       if (direct !== null) return direct;
+
+      /* The invoices page carries neither .js-maintenance-limit nor
+         .js-datapair — both are work-order-detail furniture — so the figure
+         on the one page where it gates a submit used to be reachable only
+         through the prose regex at the bottom of this function. This is that
+         page's own hook, and it goes ahead of the prose for the same reason
+         every other selector here prefers a js- class to body text. */
+      const alert = app.to_cents(app.text(app.SELECTORS.invoices_limit_alert));
+
+      if (alert !== null) return alert;
 
       for (const pair of document.querySelectorAll(app.SELECTORS.datapair)) {
         const text = pair.textContent || "";
@@ -969,6 +1565,8 @@
      script on it at all. */
   chrome.runtime.onMessage.addListener(app.handle_message);
 
+  /* Nothing awaits init(): it sends one fire-and-forget message and its
+     failure mode is "the web app learns this URL a little later instead". */
   if (document.readyState === "complete") app.init();
   else window.addEventListener("load", () => app.init(), { once: true });
 })();
