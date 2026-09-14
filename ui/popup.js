@@ -111,7 +111,7 @@ async function render() {
     : state.session.device_name || "";
 
   render_sync(state);
-  render_delivery();
+  await render_delivery();
   render_bt(state);
 
   const stamp = state.session.checked_at
@@ -242,43 +242,18 @@ function describe_reports(reports) {
  * manager who has just approved something and does not want to wait a minute,
  * and for anybody testing that the whole path works.
  */
-function render_delivery() {
+async function render_delivery() {
   els.delivery_tally.textContent =
     "Approved work is delivered to Appfolio automatically, about once a minute.";
 
   els.delivery_actions.innerHTML = "";
 
-  /* First, because until somebody has run it nobody knows whether the rest
-     works. It reads a vendor page and writes nothing on it.
-
-     It takes a label now, like Deliver now does: on the list page it clicks
-     through all three tabs and back, each bounded by the content script's own
-     ten-second budget, so a disabled button with its original text on it looks
-     dead for up to forty seconds. */
-  els.delivery_actions.appendChild(
-    button("Check this page", "btn btn--quiet", async (event) => {
-      const pressed = event.currentTarget;
-
-      pressed.disabled = true;
-      pressed.textContent = "Checking.";
-
-      const result = await ask("PROBE_PAGE");
-
-      pressed.disabled = false;
-      pressed.textContent = "Check this page";
-
-      if (result.ok === false) {
-        els.delivery_probe.hidden = true;
-        say(result.error || "Could not read that page.", "warn");
-
-        return;
-      }
-
-      say("");
-      els.delivery_probe.hidden = false;
-      els.delivery_probe.textContent = describe_probe(result.report || {});
-    }),
-  );
+  /* The page check below is an instrument, not an errand, so it is only offered
+     where it can actually run. Same test as the service worker's own guard, so
+     the button is present in exactly the cases the handler accepts. `tabs` is
+     already in the manifest, which is what makes `url` readable here. */
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const on_portal = String(tab?.url || "").startsWith("https://vendor.appfolio.com");
 
   els.delivery_actions.appendChild(
     button("Deliver now", "btn btn--quiet", async (event) => {
@@ -349,6 +324,40 @@ function render_delivery() {
       );
     }),
   );
+
+  /* A diagnostic rather than an action — it reads a vendor page and writes
+     nothing on it — so it takes `.link` and sits after the real button, the way
+     Clear synced sits after Retry all that failed.
+
+     It takes a present-tense label like Deliver now does: on the list page it
+     clicks through all three tabs and back, each bounded by the content
+     script's own ten-second budget, so a disabled button with its original text
+     on it looks dead for up to forty seconds. */
+  if (on_portal)
+    els.delivery_actions.appendChild(
+      button("Check this page", "link", async (event) => {
+        const pressed = event.currentTarget;
+
+        pressed.disabled = true;
+        pressed.textContent = "Checking.";
+
+        const result = await ask("PROBE_PAGE");
+
+        pressed.disabled = false;
+        pressed.textContent = "Check this page";
+
+        if (result.ok === false) {
+          els.delivery_probe.hidden = true;
+          say(result.error || "Could not read that page.", "warn");
+
+          return;
+        }
+
+        say("");
+        els.delivery_probe.hidden = false;
+        els.delivery_probe.textContent = describe_probe(result.report || {});
+      }),
+    );
 }
 
 function render_sync(state) {

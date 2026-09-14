@@ -126,6 +126,13 @@ button:disabled {
   color: var(--ink);
 }
 
+/* The only .link that disables itself for long enough to matter: a list-page
+   probe clicks through three tabs and can sit there for forty seconds. */
+.link:disabled {
+  color: var(--ink-faint);
+  text-decoration: none;
+}
+
 .link--danger {
   color: var(--bad);
 }
