@@ -42,6 +42,22 @@
     list_item: ":scope > li.list-group-item",
     number_in_row: ".js-work-order-number [aria-label='Number']",
 
+    /* Appfolio's own per-row select box, which is the list's only selection.
+       Two things about it are worth writing down, because both look usable and
+       are not: its `id` is Appfolio's internal work-order id (`18662`) and not
+       the number the row displays (`18094-2`), so a box is matched to a row
+       through the `<li>` that contains it and never through its own value; and
+       the header select-all above the list has no stable hook at all — its id
+       is `selectall-1`, then `selectall-2` on the next load. Watch the count
+       below instead of trying to name that box. */
+    row_select: "input.js-select-work-order-item",
+
+    /* "12 Selected", in two responsive duplicates. This is the authoritative
+       signal that the selection changed: Appfolio's select-all sets every row
+       box directly and fires no `change` on any of them, but it always writes
+       these. */
+    selected_count: ".js-num-selected-text",
+
     detail_body: ".js-work-order-body__details",
     detail_header: ".js-work-order-header-left.work-order-header__left",
     detail_description: ".js-work-order-description",
@@ -175,7 +191,14 @@
           "a[href*='/work_orders/'], a[href*='/service_requests/']",
         );
 
-        return { element, number, href: anchor?.href || "" };
+        /* A row whose box is missing is still a row — it simply cannot be
+           selected, and it still deserves a badge. */
+        return {
+          element,
+          number,
+          href: anchor?.href || "",
+          box: element.querySelector(SELECTORS.row_select),
+        };
       })
       .filter((row) => row !== null);
   }

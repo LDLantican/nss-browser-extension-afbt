@@ -58,14 +58,24 @@ settings never signs anybody out.
 
 ## Using it
 
-**On the AppFolio work-order list**, every row gets a tick box and a status
-badge read live from the web app. A row is read by fetching its own work-order
-page and parsing it — confirmed working against a live list — rather than by
-clicking expand and reading the fields on the next statement, which is the race
-that used to leave fields empty. Nothing is ever ticked for you: not every
-AppFolio work order is ASH's, and there is no field that says which are, so the
-choice stays yours. Shift-click selects a range. The bar at the bottom sends
-what is ticked, and optionally queues the same rows for Buildertrend.
+**On the AppFolio work-order list**, rows are chosen with **AppFolio's own row
+checkboxes** — the ones that drive their header select-all and their "N
+Selected" counter. The extension adds no box of its own; it reads theirs. It
+used to add one, and the result was two checkboxes on every row a thumb's width
+apart, with no way to tell which meant *sync* and which sat beside *Cancel*.
+Shift-click selects a range, which AppFolio does not do by itself. Every row
+also gains a status badge read live from the web app, and the bar at the bottom
+sends what is ticked and optionally queues the same rows for Buildertrend.
+
+Nothing is ever ticked for you: not every AppFolio work order is ASH's, and
+there is no field that says which are, so the choice stays yours. The only two
+things the extension writes to the selection are finishing a shift-range you
+started and clearing rows it has just sent — and it does both the way the page
+would, so AppFolio's own counter never disagrees with what you see.
+
+A row is read by fetching its own work-order page and parsing it — confirmed
+working against a live list — rather than by clicking expand and reading the
+fields on the next statement, which is the race that used to leave fields empty.
 
 **A badge says what the web app holds right now** — not imported, synced,
 who it is assigned to, whether it is approved. If the web app cannot be reached
@@ -97,7 +107,7 @@ background/     the service worker: all network, credentials and queues
   notify.js       notifications and the toolbar badge
 content/        the page scripts
   appfolio_scrape.js       shared reader, loaded first in both AppFolio entries
-  appfolio_list.js         tick boxes, badges, the action bar
+  appfolio_list.js         badges, the action bar, reading AppFolio's ticks
   appfolio_work_order.js   the single work-order page
   buildertrend_add_job.js  v1's form filler, near enough unchanged
 ui/             popup and options

@@ -1,5 +1,5 @@
 /**
- * The Appfolio work-order list, with a tick box on every row.
+ * The Appfolio work-order list, with a badge on every row.
  *
  * This is where the manager's real work happens, and the thing it has to be
  * good at is one job: choosing. Not every work order in Appfolio is ASH's, and
@@ -7,6 +7,26 @@
  * and **nothing here is ever ticked for her.** What this can do is make ticking
  * twenty rows and sending them one action instead of twenty rounds of
  * copy-paste, which is the actual cause of the backlog.
+ *
+ * ## The ticking is Appfolio's, and that is the point
+ *
+ * This used to inject a checkbox of its own onto every row. Appfolio's list
+ * already has one — it drives their header select-all, their "N Selected"
+ * counter and their Bulk Actions menu — so every row carried two boxes a
+ * thumb's width apart, and ours sat at the bottom edge of the card where it
+ * read as nearly belonging to the next work order. A manager cannot be expected
+ * to know which of two identical controls means "sync" and which one is next to
+ * "Cancel", so there is now only one, and it is hers.
+ *
+ * So the selection is not state here. It is read off the page at the moment it
+ * is needed, and the only things this ever writes to it are completing a range
+ * she started with shift, and clearing the rows it has just sent.
+ *
+ * Reading rather than mirroring is also the only version that works.
+ * **Appfolio's select-all sets all fifty row boxes and fires no `change` on any
+ * of them** — a mirrored Set fed by per-box listeners would sit there saying
+ * "0 selected" with the whole page ticked. What select-all always updates is
+ * the counter, so the counter is what is watched.
  *
  * ## The badges, and why they are allowed to say nothing
  *
@@ -28,19 +48,21 @@
   const LIST_PATH = "/maintenance/service_requests/work_orders";
 
   const app = {
-    /** number => the row's own <li>, for the rows currently on screen. */
+    /** number => the row, for the rows currently on screen. */
     rows: new Map(),
 
-    /** number => true, the manager's ticks. Survives a re-render. */
-    selected: new Set(),
-
-    /** The last row ticked, so shift-click has a range to work from. */
+    /** The last row clicked, so shift-click has a range to work from. */
     anchor: null,
 
     settings: {},
 
+    message: null,
+
     /** Set while a sync is in flight, so the bar cannot be double-fired. */
     busy: false,
+
+    /** Kept so a re-init cannot leave two observers counting the same page. */
+    selection_observer: null,
 
     async init() {
       const list = await nss.query_element(nss.SELECTORS.list);
@@ -50,6 +72,7 @@
       app.settings = state?.settings || {};
 
       app.render_rows();
+      app.watch_selection(list);
       app.render_bar();
 
       /* Badges come last and asynchronously: the ticking must work the instant
@@ -66,96 +89,137 @@
         app.rows.set(row.number, row);
         app.decorate(row);
       }
-
-      /* A tick for a row that has scrolled out of the page is dropped, so the
-         count in the bar can never exceed what is on screen — a manager acting
-         on "Sync 20" needs those to be twenty rows she can see. */
-      for (const number of [...app.selected]) {
-        if (!app.rows.has(number)) app.selected.delete(number);
-      }
     },
 
+    /**
+     * The badge strip under a row.
+     *
+     * The guard is on the badge's number rather than on the strip's existence,
+     * because Appfolio reusing an `<li>` for a different work order would
+     * otherwise leave a badge that is confidently about the wrong job — which
+     * is the one thing a badge is not allowed to be.
+     */
     decorate(row) {
-      if (row.element.querySelector(".nss-row")) return;
+      const existing = row.element.querySelector(".nss-row");
+
+      if (existing) {
+        const badge = existing.querySelector(".nss-badge");
+        if (badge?.dataset.number === row.number) return;
+
+        existing.remove();
+      }
 
       const holder = document.createElement("div");
       holder.className = "nss-row";
-
-      const label = document.createElement("label");
-      label.className = "nss-tick";
-      label.title = `Select work order ${row.number}`;
-
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.className = "nss-tick__box";
-      box.checked = app.selected.has(row.number);
-      box.dataset.number = row.number;
-
-      box.addEventListener("click", (event) => app.on_tick(event, row.number));
 
       const badge = document.createElement("span");
       badge.className = "nss-badge nss-badge--loading";
       badge.dataset.number = row.number;
       badge.textContent = "checking…";
 
-      label.appendChild(box);
-      holder.appendChild(label);
       holder.appendChild(badge);
 
       row.element.classList.add("nss-has-row");
       row.element.appendChild(holder);
     },
 
-    /**
-     * Ticking a box, with shift for a range.
-     *
-     * Shift-click is the difference between selecting eighteen of twenty rows
-     * in two clicks and in eighteen — and eighteen clicks is the thing this
-     * extension exists to remove.
-     */
-    on_tick(event, number) {
-      const box = event.currentTarget;
+    /* ---- the selection, which belongs to Appfolio ------------------------- */
 
-      if (event.shiftKey && app.anchor !== null && app.anchor !== number) {
+    /** Ticked rows, in page order — the order a manager reads them in. */
+    selected_rows() {
+      return [...app.rows.values()].filter((row) => row.box?.checked);
+    },
+
+    row_of(box) {
+      for (const row of app.rows.values()) if (row.box === box) return row;
+
+      return null;
+    },
+
+    /**
+     * Tick or untick a row as Appfolio would have.
+     *
+     * The dispatch is not optional. Appfolio keeps its own "N Selected" and its
+     * own Bulk Actions state; a box changed behind its back leaves the page
+     * disagreeing with itself, which is a worse bug than the one this file was
+     * rewritten to fix.
+     */
+    set_checked(row, wanted) {
+      if (!row?.box || row.box.checked === wanted) return;
+
+      row.box.checked = wanted;
+      row.box.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+
+    watch_selection(list) {
+      app.selection_observer?.disconnect();
+
+      let pending = false;
+
+      const recount = () => {
+        if (pending) return;
+
+        pending = true;
+
+        setTimeout(() => {
+          pending = false;
+          app.render_bar();
+        }, 0);
+      };
+
+      /* Bubble phase on purpose: Appfolio's own handler has run by then, so the
+         box's `checked` is the value the manager just chose. */
+      list.addEventListener("change", (event) => {
+        if (event.target?.matches?.(nss.SELECTORS.row_select)) recount();
+      });
+
+      list.addEventListener("click", app.on_click);
+
+      /* The one signal select-all leaves behind. There are two counter nodes —
+         the same figure at two breakpoints — and watching both costs nothing. */
+      app.selection_observer = new MutationObserver(recount);
+
+      for (const counter of document.querySelectorAll(nss.SELECTORS.selected_count)) {
+        app.selection_observer.observe(counter, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+      }
+    },
+
+    /**
+     * Shift-click for a range, over Appfolio's boxes.
+     *
+     * Appfolio does not do this itself — clicking row 1 and shift-clicking row
+     * 5 leaves two rows ticked, not five. It is the difference between
+     * selecting eighteen of twenty rows in two clicks and in eighteen, and
+     * eighteen clicks is the thing this extension exists to remove, so it is
+     * worth putting back on top of their control.
+     */
+    on_click(event) {
+      const box = event.target;
+      if (!box?.matches?.(nss.SELECTORS.row_select)) return;
+
+      const row = app.row_of(box);
+      if (!row) return;
+
+      if (event.shiftKey && app.anchor !== null && app.anchor !== row.number) {
         const numbers = [...app.rows.keys()];
         const from = numbers.indexOf(app.anchor);
-        const to = numbers.indexOf(number);
+        const to = numbers.indexOf(row.number);
 
         if (from !== -1 && to !== -1) {
           const [start, end] = from < to ? [from, to] : [to, from];
           const wanted = box.checked;
 
           for (let index = start; index <= end; index++) {
-            if (wanted) app.selected.add(numbers[index]);
-            else app.selected.delete(numbers[index]);
+            app.set_checked(app.rows.get(numbers[index]), wanted);
           }
-
-          app.sync_boxes();
-          app.render_bar();
-
-          return;
         }
       }
 
-      if (box.checked) app.selected.add(number);
-      else app.selected.delete(number);
-
-      app.anchor = number;
-      app.render_bar();
-    },
-
-    sync_boxes() {
-      for (const box of document.querySelectorAll(".nss-tick__box")) {
-        box.checked = app.selected.has(box.dataset.number);
-      }
-    },
-
-    select_all(wanted) {
-      if (wanted) for (const number of app.rows.keys()) app.selected.add(number);
-      else app.selected.clear();
-
-      app.sync_boxes();
-      app.render_bar();
+      app.anchor = row.number;
     },
 
     /* ---- badges ---------------------------------------------------------- */
@@ -242,8 +306,7 @@
 
       if (status_answer !== undefined) bar.dataset.statusError = status_answer?.ok ? "" : "1";
 
-      const count = app.selected.size;
-      const all_ticked = count > 0 && count === app.rows.size;
+      const count = app.selected_rows().length;
       const bt = app.settings.buildertrend_enabled !== false;
 
       bar.innerHTML = "";
@@ -251,21 +314,17 @@
       const left = document.createElement("div");
       left.className = "nss-bar__left";
 
+      /* With no control of our own on the row, the empty bar is the only thing
+         that says this feature exists — so it names Appfolio's checkboxes
+         rather than only counting rows. */
       const tally = document.createElement("span");
       tally.className = "nss-bar__count";
       tally.textContent =
         count === 0
-          ? `${app.rows.size} work orders on this page`
+          ? `${app.rows.size} work orders on this page — tick rows to sync`
           : `${count} selected`;
 
       left.appendChild(tally);
-
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.className = "nss-bar__link";
-      toggle.textContent = all_ticked ? "Clear selection" : "Select all on page";
-      toggle.addEventListener("click", () => app.select_all(!all_ticked));
-      left.appendChild(toggle);
 
       if (bar.dataset.statusError === "1") {
         const retry = document.createElement("button");
@@ -347,25 +406,27 @@
      * is worse in a billing record than a job that is missing.
      */
     async send() {
-      if (app.busy || app.selected.size === 0) return;
+      const rows = app.selected_rows();
+      if (app.busy || rows.length === 0) return;
 
       app.busy = true;
       app.message = null;
       app.render_bar();
 
-      const numbers = [...app.rows.keys()].filter((number) => app.selected.has(number));
       const work_orders = [];
+      const handed_over = [];
       const failed = [];
 
-      for (const [index, number] of numbers.entries()) {
-        app.paint_badge(number, `reading ${index + 1} of ${numbers.length}…`, "loading");
+      for (const [index, row] of rows.entries()) {
+        app.paint_badge(row.number, `reading ${index + 1} of ${rows.length}…`, "loading");
 
         try {
-          work_orders.push(await nss.scrape_row(app.rows.get(number)));
-          app.paint_badge(number, "sending…", "loading");
+          work_orders.push(await nss.scrape_row(row));
+          handed_over.push(row);
+          app.paint_badge(row.number, "sending…", "loading");
         } catch (error) {
-          failed.push(number);
-          app.paint_badge(number, "could not read", "error", error?.message || "");
+          failed.push(row.number);
+          app.paint_badge(row.number, "could not read", "error", error?.message || "");
         }
       }
 
@@ -390,8 +451,7 @@
       /* Cleared only for the rows that were actually handed over. A row that
          could not be read stays ticked, because it still needs doing and
          un-ticking it would hide that. */
-      for (const work_order of work_orders) app.selected.delete(work_order.number);
-      app.sync_boxes();
+      for (const row of handed_over) app.set_checked(row, false);
 
       const sent = result?.queued ?? work_orders.length;
 
@@ -410,6 +470,12 @@
 
     /* ---- the page is a SPA ----------------------------------------------- */
 
+    /**
+     * Sorting, filtering and paging are full navigations here — the URL changes
+     * and the document is replaced — so this runs almost never. It is kept
+     * because it costs one observer and it is what would catch Appfolio moving
+     * to in-place rendering without telling anybody.
+     */
     watch_url() {
       let last = location.href;
 
@@ -419,11 +485,6 @@
 
         last = location.href;
         app.message = null;
-
-        /* The rows are new, so the ticks belong to work orders that are no
-           longer on screen. Keeping them would let "Sync 12" mean twelve rows
-           the manager cannot see. */
-        app.selected.clear();
         app.anchor = null;
 
         app.init();
