@@ -47,6 +47,7 @@
  */
 
 import { api, fetch_photo, NetworkError } from "./api.js";
+import { check_signed_in, show_sign_in } from "./portals.js";
 
 const VENDOR_ORIGIN = "https://vendor.appfolio.com";
 const VENDOR_HOME = `${VENDOR_ORIGIN}/`;
@@ -112,6 +113,9 @@ export async function deliver_now({ manual = false } = {}) {
   };
   const reports = [];
 
+  /* Set by the first pass that has work, so the sign-in check runs once. */
+  let preflighted = false;
+
   try {
     for (let pass = 0; pass < 20; pass++) {
       const response = await api.deliveries("appfolio");
@@ -139,6 +143,39 @@ export async function deliver_now({ manual = false } = {}) {
 
       summary.dry_run = options.dry_run;
 
+      /* The guard, and the reason it sits exactly here.
+       *
+       * Above this line nothing has been claimed; below it, deliver_one's very
+       * first act is a claim, which increments `attempts` server-side. The
+       * check used to happen after that claim, inside locate(), so a signed-out
+       * portal cost one job an attempt and a `failed` result — a row on
+       * /deliveries, which is meant to be empty on a good day, and a tick
+       * toward a circuit breaker counting something that was never a delivery
+       * problem.
+       *
+       * It costs no extra page load. The tab it opens is the one tab this run
+       * reuses for every job, pointed at the page step A was going to open
+       * anyway, so locate()'s own navigate() finds it already there.
+       *
+       * Runs once per run, not once per pass: a second pass means the first one
+       * delivered something, which is proof enough of a session. */
+      if (!preflighted) {
+        preflighted = true;
+
+        const portal = await preflight_vendor(queue[0]);
+
+        if (portal.state === "signed_out") {
+          summary.reason = portal.detail;
+
+          return { ok: false, error: "vendor_signed_out", summary };
+        }
+
+        /* `unknown` proceeds. It is the answer for a slow page as well as an
+           unrecognised one, and refusing to drain on it would let one sluggish
+           load stop the day's billing. deliver_one still has every guard it
+           had before this function existed. */
+      }
+
       for (const delivery of queue) {
         const outcome = await deliver_one(delivery, options, reports);
 
@@ -150,7 +187,11 @@ export async function deliver_now({ manual = false } = {}) {
         else if (outcome === "blocked") summary.blocked += 1;
         else if (outcome === "skipped") summary.skipped += 1;
         else if (outcome === "rehearsed") summary.rehearsed = (summary.rehearsed || 0) + 1;
-        else summary.failed += 1;
+        /* Neither is a failure or counted as one. A released portal sign-out
+           left the row untouched with its attempt refunded; an expired device
+           token never got as far as claiming. Tallying either would report a
+           failure against a job still sitting in the queue. */
+        else if (outcome !== "signed_out" && outcome !== "app_signed_out") summary.failed += 1;
 
         /* A rehearsal puts the job straight back, so a second pass would pick
            the same one up and rehearse it forever. One pass is the whole run. */
@@ -162,6 +203,14 @@ export async function deliver_now({ manual = false } = {}) {
           summary.reason = "Nobody is signed in to the AppFolio vendor portal.";
 
           return { ok: false, error: "vendor_signed_out", summary };
+        }
+
+        /* Same shape, different service. Reported with the code the popup
+           already uses for an expired device token. */
+        if (outcome === "app_signed_out") {
+          summary.reason = "This device is no longer signed in to the web app.";
+
+          return { ok: false, error: "signed_out", summary };
         }
       }
     }
@@ -200,7 +249,10 @@ async function deliver_one(delivery, options, reports) {
   /* 409 is the ordinary answer when two managers drain the same queue. Not an
      error, not worth reporting, not worth retrying. */
   if (claim.status === 409) return "skipped";
-  if (claim.status === 401) return "signed_out";
+  /* This device's own token, not the portal's session — a different problem
+     with a different fix, and it must not send her to AppFolio to solve
+     something that lives in this extension's settings. */
+  if (claim.status === 401) return "app_signed_out";
   if (!claim.ok) return "failed";
 
   const finish = (state, error = "", extra = {}) => report(delivery, options, reports, state, error, extra);
@@ -209,7 +261,25 @@ async function deliver_one(delivery, options, reports) {
 
   const located = await locate(delivery);
 
-  if (located.signed_out) return finish("failed", "The AppFolio vendor portal is signed out.", { signed_out: true });
+  /* A session that lapsed between the preflight and this job.
+   *
+   * Released rather than reported, for the reason a rehearsal is: step A writes
+   * nothing to AppFolio, so nothing happened to an invoice and there is no
+   * result to record. `release` puts the row back as `pending` and refunds the
+   * attempt; `failed` would leave a row on /deliveries about a delivery that
+   * was never attempted and feed a circuit breaker counting something that is
+   * not a delivery problem.
+   *
+   * Correct *only* here. The endpoint refuses anything past `claimed` by
+   * design, and nothing downstream of step D's `submitting` may ever be quietly
+   * returned to the queue — Save has been pressed by then. */
+  if (located.signed_out) {
+    await api.release_delivery(delivery.id).catch(() => null);
+    await show_sign_in(delivery_tab_id);
+
+    return "signed_out";
+  }
+
   if (!located.ok) return finish("failed", located.error);
 
   const url = located.url;
@@ -477,6 +547,39 @@ async function locate(delivery) {
 }
 
 /**
+ * Is anybody signed in to the vendor portal, before anything is claimed?
+ *
+ * Aimed at the first job's own page rather than the portal home, so the
+ * navigation this performs is the navigation step A was about to perform: for a
+ * job with a remembered `target_url` that is the work order, and for one
+ * without it is the list. Either way `command()`'s own `navigate()` finds the
+ * tab already there and does not reload it, which is what makes the guard free.
+ *
+ * `portals.js` explains why the verdict is the tab's URL and not the DOM. The
+ * short version: a signed-out manager ends up on `passport.appf.io`, which no
+ * content script matches, so there is nothing on that page to ask.
+ */
+async function preflight_vendor(first) {
+  const url = first?.target_url || VENDOR_HOME;
+
+  const tab_id = await ensure_delivery_tab(url);
+
+  if (tab_id === null)
+    return { state: "unknown", detail: "Could not open an AppFolio vendor portal tab." };
+
+  await navigate(tab_id, url);
+
+  const verdict = await check_signed_in("appfolio", tab_id);
+
+  /* Put the sign-in page in front of her. The tab is already on it — being
+     redirected there is what produced the verdict — so this is a focus and not
+     a navigation, and nothing is typed into it. */
+  if (verdict.state === "signed_out") await show_sign_in(tab_id);
+
+  return verdict;
+}
+
+/**
  * Navigate, then ask the page one thing.
  *
  * The handshake before each command is not ceremony: the content script runs at
@@ -542,7 +645,10 @@ async function report(delivery, options, reports, state, error, extra = {}) {
     })
     .catch(() => null);
 
-  if (extra.signed_out === true) return "signed_out";
+  /* A portal sign-out used to arrive here as a `failed` result carrying
+     `signed_out: true`. It no longer reaches report() at all — deliver_one
+     releases the row instead, because nothing had happened to an invoice and
+     there was no result to record. */
 
   /* `delivered_open` is not a delivery state and never reaches the server —
      the result was posted as `delivered` just above, which is what it is. It
@@ -663,12 +769,21 @@ async function ask_page_state(tab_id, attempts = 4) {
         HANDSHAKE_MS,
       );
 
-      return response?.state || "unconfirmed";
+      const state = response?.state || "unconfirmed";
+
+      /* "unknown" is the page saying it has neither portal chrome nor a
+         sign-in marker yet, which is what a half-rendered page looks like —
+         so it is retried on the same budget as a missing listener rather than
+         returned. read_state() used to answer "ready" in this case, and
+         command() would go on to drive a page that had not arrived. */
+      if (state !== "unknown") return state;
+
+      if (attempt === attempts - 1) return "unconfirmed";
     } catch {
       if (attempt === attempts - 1) return "unconfirmed";
-
-      await new Promise((resolve) => setTimeout(resolve, 500));
     }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
   return "unconfirmed";

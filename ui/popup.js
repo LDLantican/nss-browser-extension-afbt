@@ -268,9 +268,19 @@ async function render_delivery() {
       pressed.textContent = "Deliver now";
 
       if (result.ok === false) {
-        say(result.error === "vendor_signed_out"
-          ? "Sign in to vendor.appfolio.com, then try again."
-          : result.error || "Delivery could not run.", "error");
+        /* Three different sign-ins can fail here and they have three different
+           fixes, so none of them may be worded as another. The portal one now
+           also puts its tab in front of her, so "the tab just opened" is a
+           place she can actually look. */
+        const reasons = {
+          vendor_signed_out:
+            "Nobody is signed in to the AppFolio vendor portal. Sign in on the tab just opened, then try again.",
+          signed_out:
+            "This device is no longer signed in to the web app. Open Settings and sign in again.",
+          not_permitted: "This account is not allowed to deliver invoices.",
+        };
+
+        say(reasons[result.error] || result.error || "Delivery could not run.", "error");
 
         return;
       }

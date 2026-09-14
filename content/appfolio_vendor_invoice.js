@@ -874,13 +874,39 @@
     },
 
     /**
-     * Signed in, or not.
+     * Signed in, or not, or cannot tell.
      *
      * The password check goes through visible(), because it used to be a bare
      * querySelector and *any* password input anywhere in the DOM answered
      * "signed out" — a password manager's injected field, an account panel, a
      * modal mounted but not shown. That answer is the most expensive one in
      * the extension: delivery.js aborts the entire drain on it.
+     *
+     * ## This is no longer the guard, and never really was
+     *
+     * Signing out of the portal redirects to `passport.appf.io`, a different
+     * origin that no `content_scripts` entry matches — so on the page a
+     * signed-out manager actually reaches, this function does not run at all.
+     * And if it did it would miss twice over: the default sign-in there is an
+     * emailed access link rather than a password (a password only appears under
+     * *More Sign In Options*), and the title reads `Passport | AppFolio`, which
+     * matches neither pattern below. Both observed live, 14 September 2026.
+     *
+     * `background/portals.js` owns the verdict now, from the tab's URL, which
+     * is the only thing that can see a cross-origin redirect. What is left here
+     * is a second opinion about the portal's *own* pages — worth keeping, since
+     * a session that lapses while a portal page is open is real.
+     *
+     * ## Why the default is no longer "ready"
+     *
+     * It used to return "ready" for anything that was not provably signed out,
+     * so a blank or half-rendered page read as signed in — which is the same
+     * mistake `already_invoiced()` and `maintenance_limit_cents()` were fixed
+     * for. `.js-navbar` is the positive evidence it lacked: portal chrome that
+     * lives *outside* `#property-content`, so it survives the spinner that
+     * replaces that container's children and is present while the content is
+     * still in flight. No chrome and no sign-in marker is now "unknown", and
+     * portals.js treats unknown as a question rather than an answer.
      */
     read_state() {
       for (const field of document.querySelectorAll("input[type='password']"))
@@ -888,7 +914,10 @@
 
       if (/sign in|log in/i.test(document.title || "")) return "signed_out";
 
-      return "ready";
+      if (document.querySelector(".js-navbar") || document.querySelector(".js-universal-search"))
+        return "ready";
+
+      return "unknown";
     },
 
     /**

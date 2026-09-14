@@ -27,6 +27,8 @@
  * run gets seen now.
  */
 
+import { check_signed_in, show_sign_in } from "./portals.js";
+
 const ADD_JOB_URL = "https://buildertrend.net/app/JobPage/0/1?openCondensed=true";
 const ADD_JOB_PATH = "/app/JobPage/0/";
 
@@ -39,16 +41,42 @@ export async function fill_job(work_order, config) {
   if (!work_order || typeof work_order !== "object")
     return { ok: false, error: "Invalid work order." };
 
-  /* A tab of our own. It is created focused, because the fill dims the page and
-     blocks clicks while it runs and a manager should be able to see that
-     happening rather than discover it later in a background tab. */
-  const tab = await chrome.tabs.create({ url: ADD_JOB_URL, active: true });
+  /* A tab of our own, opened **unfocused** and focused a moment later.
+   *
+   * It used to be created focused, because the fill dims the page and blocks
+   * clicks while it runs and a manager should see that happening rather than
+   * discover it later in a background tab. That is still true of a fill — but
+   * it meant a lapsed session took over her screen to show her a login page,
+   * which is the one case where stealing focus buys nothing.
+   *
+   * So the tab is opened quietly, asked what it is, and only then brought
+   * forward — for the fill, or for the sign-in page, and the answer decides
+   * which. One tab either way, and it is the same tab: being redirected to
+   * login.buildertrend.com is what produced the verdict, so it is already
+   * sitting on the page she needs. */
+  const tab = await chrome.tabs.create({ url: ADD_JOB_URL, active: false });
 
   if (!tab?.id) return { ok: false, error: "Could not open a Buildertrend tab." };
 
   reported_tabs.delete(tab.id);
 
   await wait_for_load(tab.id);
+
+  const portal = await check_signed_in("buildertrend", tab.id);
+
+  if (portal.state === "signed_out") {
+    await show_sign_in(tab.id);
+
+    return {
+      ok: false,
+      error: "You are signed out of Buildertrend. Sign in on the tab just opened, then try again.",
+    };
+  }
+
+  /* `unknown` goes on. It is the answer for a slow page as much as an
+     unrecognised one, and report_not_ready() below already words every way
+     this can fail from here. */
+  await chrome.tabs.update(tab.id, { active: true }).catch(() => null);
 
   /* Asked directly rather than waited for.
    *

@@ -91,6 +91,8 @@ background/     the service worker: all network, credentials and queues
   auth.js         sign-in, sign-out, heartbeat
   store.js        chrome.storage, with writes serialized
   sync.js         the durable queue, retries, and the reconcile step
+  delivery.js     draining the delivery queue into the Appfolio vendor portal
+  portals.js      is anybody signed in to the vendor portal / Buildertrend
   buildertrend.js opening and driving the Buildertrend tab
   notify.js       notifications and the toolbar badge
 content/        the page scripts
