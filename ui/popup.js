@@ -606,6 +606,39 @@ function describe_bt_run(run) {
   return lines.join("\n");
 }
 
+const NEWLINE = String.fromCharCode(10);
+
+/**
+ * What the last estimate run did, in the same pasteable plain text as the
+ * delivery probe and the job-creation record.
+ */
+function describe_estimate_run(run) {
+  const lines = [];
+  const summary = run.summary || {};
+
+  lines.push(`estimates : ${new Date(run.at || Date.now()).toLocaleString()}`);
+  lines.push(
+    `result    : ${summary.delivered || 0} written · ${summary.rehearsed || 0} rehearsed · `
+    + `${summary.blocked || 0} blocked · ${summary.unconfirmed || 0} unconfirmed · ${summary.failed || 0} failed`,
+  );
+
+  if (run.error) lines.push(`problem   : ${run.error}`);
+  if (summary.reason) lines.push(`reason    : ${summary.reason}`);
+
+  for (const report of run.reports || []) {
+    lines.push("");
+    lines.push(`${report.number}  ${report.ok ? "ok" : "NOT DONE"}`);
+    if (report.expected) lines.push(`  expected: ${report.expected}`);
+    /* A rehearsal's whole product. It sends nothing, so the payload it *would*
+       have sent is the only thing there is to check — printing the total and
+       not the lines is a rehearsal that reports almost nothing. */
+    if (report.note) lines.push(`  would do: ${report.note}`);
+    if (report.error) lines.push(`  problem : ${report.error}`);
+  }
+
+  return lines.join(NEWLINE);
+}
+
 function render_bt(state) {
   if (state.settings?.buildertrend_enabled === false) {
     els.bt_panel.hidden = true;
@@ -747,10 +780,40 @@ function render_bt(state) {
   const worth_showing =
     run && ((run.summary?.unidentified || 0) > 0 || (run.summary?.failed || 0) > 0 || pending.length > 0);
 
-  els.bt_probe.hidden = !worth_showing;
-  els.bt_probe.textContent = worth_showing ? describe_bt_run(run) : "";
+  /* The estimate run's own account, kept because the banner that used to carry
+     it is cleared by the popup's heartbeat on the next open — so the first
+     rehearsal reported its result to nobody. */
+  const estimate_run = state.bt_last_estimate_run;
+  const estimate_text = estimate_run ? describe_estimate_run(estimate_run) : "";
+
+  const text = [worth_showing ? describe_bt_run(run) : "", estimate_text].filter(Boolean).join(NEWLINE + NEWLINE);
+
+  els.bt_probe.hidden = text === "";
+  els.bt_probe.textContent = text;
 
   els.bt_actions.innerHTML = "";
+
+  /* Asked for rather than scheduled. Selecting the job by API means the tab
+     normally stays hidden, but the picker fallback still brings one forward,
+     and an estimate is a real write into somebody else's system — a person
+     choosing the moment is worth more than a minute's latency. */
+  els.bt_actions.appendChild(
+    button("Write Buildertrend estimates", "btn btn--quiet", async (event) => {
+      const element = event.currentTarget;
+      element.disabled = true;
+      element.textContent = "Writing…";
+
+      const result = await ask("DELIVER_ESTIMATES");
+      const summary = result?.summary || {};
+
+      if (result?.ok === false) say(summary.reason || result.error || "The estimates could not be written.", "error");
+      else if ((summary.delivered || 0) > 0) say(`${summary.delivered} written to Buildertrend.`, "ok");
+      else if ((summary.rehearsed || 0) > 0) say(`${summary.rehearsed} rehearsed. Nothing was written.`, "ok");
+      else say("Nothing was waiting for an estimate.", "ok");
+
+      render();
+    }),
+  );
 
   if (queue.length > 0)
     els.bt_actions.appendChild(

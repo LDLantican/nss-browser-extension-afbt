@@ -30,11 +30,13 @@ import {
   update_bt_pending_links,
   bt_last_run,
   save_bt_last_run,
+  bt_last_estimate_run,
   migrate_bt_unrecorded,
 } from "./store.js";
 import { notify, set_badge } from "./notify.js";
 import { api, normalize_base, origin_pattern } from "./api.js";
 import { fill_job, run_queue, find_existing_job } from "./buildertrend.js";
+import { deliver_estimates_now } from "./estimates.js";
 import {
   deliver_now,
   is_delivery_alarm,
@@ -63,7 +65,7 @@ const handlers = {
   /* ---- state the UI renders from ---------------------------------------- */
 
   async STATE() {
-    const [config, session, counts, jobs, queue, pending, last_run] = await Promise.all([
+    const [config, session, counts, jobs, queue, pending, last_run, last_estimate] = await Promise.all([
       settings(),
       auth.state(),
       sync.summary(),
@@ -71,6 +73,7 @@ const handlers = {
       bt_queue(),
       bt_pending_links(),
       bt_last_run(),
+      bt_last_estimate_run(),
     ]);
 
     return {
@@ -84,6 +87,7 @@ const handlers = {
          finish, and the last run is the only account of why. */
       bt_pending_links: pending,
       bt_last_run: last_run,
+      bt_last_estimate_run: last_estimate,
       suggested_device_name: auth.suggested_device_name(),
     };
   },
@@ -375,6 +379,20 @@ const handlers = {
     await forget_pending_links([wanted]);
 
     return { ok: true, url };
+  },
+
+  /**
+   * Write the approved work waiting for a Buildertrend estimate.
+   *
+   * Deliberately its own command rather than part of DELIVER_NOW. The invoice
+   * drain runs unattended every minute in a background tab; this one has to
+   * bring a tab to the front to choose a job, because Buildertrend's estimate
+   * screen acts on the selected job and its picker does not render in a hidden
+   * tab. Stealing focus every minute is not something to do to somebody who is
+   * working, so this is asked for rather than scheduled.
+   */
+  async DELIVER_ESTIMATES() {
+    return deliver_estimates_now({ manual: true });
   },
 
   async CLEAR_BT_QUEUE() {

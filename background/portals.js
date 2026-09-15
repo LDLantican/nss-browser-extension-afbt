@@ -71,8 +71,13 @@ export const PORTALS = {
 
     /* Buildertrend serves plenty of pages this extension has no script on, so
        the host alone is not enough — the job form is the page it drives, and
-       leaving that path is the v1 signal this generalises. */
-    path_prefix: "/app/JobPage/0/",
+       leaving that path is the v1 signal this generalises.
+       
+       A **list**, because there are two such pages now: the add-job form and
+       the estimate screen. With one prefix the estimate page classified as
+       `elsewhere`, which check_signed_in() reports as `unknown` for ever
+       rather than as a session it can act on. */
+    path_prefixes: ["/app/JobPage/0/", "/app/Estimate"],
     sign_in_hosts: ["login.buildertrend.com"],
     status_message: "ADD_JOB_PAGE_STATUS",
     ready_state: "ready",
@@ -125,7 +130,9 @@ export function classify_url(site, url) {
   if (portal.sign_in_hosts.includes(parsed.hostname)) return "sign_in";
 
   if (parsed.hostname !== portal.host) return "elsewhere";
-  if (portal.path_prefix && !parsed.pathname.startsWith(portal.path_prefix)) return "elsewhere";
+
+  if (portal.path_prefixes && !portal.path_prefixes.some((prefix) => parsed.pathname.startsWith(prefix)))
+    return "elsewhere";
 
   return "portal";
 }

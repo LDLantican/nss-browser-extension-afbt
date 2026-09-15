@@ -20,6 +20,7 @@ const KEYS = {
   bt_queue: "bt_queue",
   bt_pending_links: "bt_pending_links",
   bt_last_run: "bt_last_run",
+  bt_last_estimate_run: "bt_last_estimate_run",
 };
 
 const DEFAULT_SETTINGS = {
@@ -35,6 +36,13 @@ const DEFAULT_SETTINGS = {
   job_group: "Appfolio",
   bt_client_name: "Camelot Properties",
   bt_client_row_id: "39778241",
+
+  // Required on every estimate line, and it feeds ASH's job costing, so it is
+  // a tenant fact rather than something the filler should choose. Here rather
+  // than in the code because the owner has already said somebody will want to
+  // pick it per job one day; this is where that choice will read from.
+  bt_cost_code: "8000 - General Handyman",
+
 };
 
 /** Serializes every write, so no two mutators can lose each other's work. */
@@ -176,6 +184,26 @@ export function bt_last_run() {
 
 export function save_bt_last_run(value) {
   return update(KEYS.bt_last_run, null, () => value);
+}
+
+/**
+ * What the last estimate run did.
+ *
+ * Its own record rather than sharing `bt_last_run`, because the two answer
+ * different questions — one is "were the jobs created", the other "were they
+ * estimated" — and a run of either would otherwise erase the other's account.
+ *
+ * It exists for the reason the job-creation record does: the only report was a
+ * banner in the popup, and the popup's own heartbeat clears that banner the
+ * moment it is reopened. So the first estimate rehearsal reported its result to
+ * nobody, exactly as six job-creation runs had.
+ */
+export function bt_last_estimate_run() {
+  return read(KEYS.bt_last_estimate_run, null);
+}
+
+export function save_bt_last_estimate_run(value) {
+  return update(KEYS.bt_last_estimate_run, null, () => value);
 }
 
 /**

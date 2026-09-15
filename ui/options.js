@@ -44,6 +44,7 @@ const els = {
   job_group: document.getElementById("job-group"),
   bt_client_name: document.getElementById("bt-client-name"),
   bt_client_row_id: document.getElementById("bt-client-row-id"),
+  bt_cost_code: document.getElementById("bt-cost-code"),
   bt_save: document.getElementById("bt-save"),
 };
 
@@ -89,6 +90,7 @@ async function render() {
   els.job_group.value = settings.job_group || "";
   els.bt_client_name.value = settings.bt_client_name || "";
   els.bt_client_row_id.value = settings.bt_client_row_id || "";
+  els.bt_cost_code.value = settings.bt_cost_code || "";
   toggle_bt_fields();
 
   const signed_in = state.session?.signed_in === true;
@@ -297,6 +299,7 @@ els.bt_save.addEventListener("click", async () => {
       job_group: els.job_group.value.trim(),
       bt_client_name: els.bt_client_name.value.trim(),
       bt_client_row_id: els.bt_client_row_id.value.trim(),
+      bt_cost_code: els.bt_cost_code.value.trim(),
     },
   });
 
