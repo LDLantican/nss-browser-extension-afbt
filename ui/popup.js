@@ -134,6 +134,20 @@ async function render() {
 }
 
 /**
+ * " against test work orders", or nothing at all.
+ *
+ * Only said for `sample`, which is the exception to the rule the AppFolio bar
+ * follows — there the mode is stated permanently, because the question it
+ * answers is "is what I am about to send real?" and it is asked before every
+ * action. Here it is a report of something already done, and appending "against
+ * real work orders" to every ordinary delivery notice would be noise on the
+ * line a manager reads a hundred times a day.
+ */
+function scope_note(summary) {
+  return summary?.scope === "sample" ? " against test work orders" : "";
+}
+
+/**
  * The page probe's answer, as something a person can read or screenshot.
  *
  * Plain text on purpose. Its whole reason for existing is to be sent to whoever
@@ -278,6 +292,14 @@ async function render_delivery() {
           signed_out:
             "This device is no longer signed in to the web app. Open Settings and sign in again.",
           not_permitted: "This account is not allowed to deliver invoices.",
+
+          /* Its own wording because it is not a sign-in problem and the three
+             above are. Nothing is wrong with this device; the web app did not
+             say which work orders it may bill, and guessing between a test job
+             and a real client's invoice is not something a retry should do
+             quietly. */
+          scope_unknown:
+            "The web app did not say which work orders it may deliver, so nothing was sent.",
         };
 
         say(reasons[result.error] || result.error || "Delivery could not run.", "error");
@@ -286,6 +308,16 @@ async function render_delivery() {
       }
 
       const summary = result.summary || {};
+
+      /* Ahead of `paused`, because it is the more specific answer and the more
+         actionable one: there is a filled invoice on a tab with her name on it.
+         Without this the run reads as "Nothing was waiting to be delivered",
+         which is both wrong and the opposite of what she should do next. */
+      if (summary.awaiting_submit === true) {
+        say(summary.reason || "An invoice is filled in and waiting to be submitted.", "warn");
+
+        return;
+      }
 
       if (summary.paused === true) {
         say(summary.reason || "Delivery is paused because too much has failed recently.", "warn");
@@ -301,7 +333,7 @@ async function render_delivery() {
 
         say(
           summary.rehearsed
-            ? "Rehearsed without writing anything. Nothing was submitted."
+            ? `Rehearsed${scope_note(summary)} without writing anything. Nothing was submitted.`
             : "Rehearsal stopped early - see below.",
           summary.rehearsed ? "ok" : "warn",
         );
@@ -329,7 +361,9 @@ async function render_delivery() {
       ].filter(Boolean);
 
       say(
-        parts.length === 0 ? "Nothing was waiting to be delivered." : parts.join(" \u00b7 "),
+        parts.length === 0
+          ? `Nothing was waiting to be delivered${scope_note(summary)}.`
+          : parts.join(" \u00b7 ") + scope_note(summary) + ".",
         summary.unconfirmed || summary.failed || summary.blocked ? "warn" : "ok",
       );
     }),

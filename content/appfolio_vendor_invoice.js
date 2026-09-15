@@ -133,6 +133,12 @@
       status: "span.js-work-order-status",
       maintenance_limit: ".js-maintenance-limit",
       datapair: ".js-datapair",
+
+      /* The work order's own description, on the invoices page, where it has a
+         hook of its own. On the work-order page it is a .js-datapair like any
+         other and has to be found by its label — see description_text(). Both
+         confirmed in the captures under storage/temporary-items/. */
+      detail_description: ".js-detail-description",
       work_done: "button.js-done-button",
       notes_button: "button.js-notes-button",
       invoices_button: ".js-invoices-button",
@@ -435,6 +441,7 @@
         status: app.text(app.SELECTORS.status),
         needs_accepting: /accept/i.test(app.text(app.SELECTORS.status)),
         maintenance_limit_cents: app.maintenance_limit_cents(),
+        description: app.description_text(),
       };
     },
 
@@ -586,6 +593,18 @@
 
       if (items.length === 0) return { ok: false, error: "No invoice items were sent." };
 
+      /* The last chance to notice this is the wrong work order to be billing.
+         Step A asked the same question on the work order's own page; this asks
+         it on the page the invoice is being typed into, which is the page the
+         answer has to be true about. `.js-detail-description` is right here in
+         the Job Details block, so it costs a selector lookup.
+
+         An unreadable description refuses in sample mode and passes in live,
+         for the reason written out in delivery.js's scope_refusal(). */
+      const population = app.population_refusal(job.scope);
+
+      if (population !== null) return { ok: false, blocked: true, error: population };
+
       /* AppFolio's own answer to "have I billed this already?", and a better
          guard than anything the web app can hold: it survives a database
          restore and it is true even if somebody invoiced by hand. */
@@ -692,12 +711,37 @@
 
       if (submit === null) return { ok: false, error: "Could not find the Submit Invoice button." };
 
+      /* `blocked`, not a bare failure, and the distinction is the whole of
+         step 2 of the rollout.
+         
+         Everything worked: the form is filled, the total reads back to the
+         cent, and it is sitting there waiting for a person — which is exactly
+         what auto_submit: false asks for. Reported as a plain failure it would
+         spend the attempt, put a row on a screen that is meant to be empty on a
+         good day, and leave the delivery `failed` — which is claimable, so the
+         next poll would re-claim it and fill the form again a minute later, and
+         again, until recent_failures() tripped the circuit breaker and paused
+         the queue. One job on its own would do it inside ten minutes.
+         
+         That is the argument release() already makes for a rehearsal, applied
+         to the other half-step: nothing was sent, a retry cannot help, and a
+         person is required. `blocked` is the state for precisely that — it is
+         excluded from the breaker, it is not claimable, and /deliveries renders
+         it as "Held back" with the two buttons that resolve it once she has
+         pressed Submit. */
       if (job.auto_submit === false)
         return {
           ok: false,
+          blocked: true,
+
+          /* Distinct from every other refusal, because this is the only one
+             that leaves something on the page worth keeping: a filled,
+             cent-checked invoice waiting for a person to press Submit.
+             delivery.js reads it and declines to close the tab. */
+          awaiting_submit: true,
           error:
-            "Filled in and checked, but automatic submitting is switched off. "
-            + "Press Submit Invoice on the vendor page.",
+            "Filled in and checked to the cent, but automatic submitting is switched off. "
+            + "Press Submit Invoice on the vendor page, then mark this as delivered.",
           read_back: app.dollars(total),
         };
 
@@ -1173,6 +1217,90 @@
       const match = String(text || "").match(/(\d+)\s*-\s*(\d+)/);
 
       return match ? `${match[1]}-${match[2]}` : "";
+    },
+
+    /**
+     * Why this page may not be billed, or null.
+     *
+     * The comparison is deliberately not done here — it is `marked()` in
+     * background/scope.js and `WorkOrderScope::matches()` on the server, and a
+     * third spelling of it inside a content script is how three things quietly
+     * stop agreeing. This reads the page and applies the answer.
+     *
+     * No scope at all is a refusal. delivery.js will not start a run without
+     * one, so reaching this with none means something is wrong rather than
+     * something is old.
+     */
+    population_refusal(scope) {
+      const mode = scope?.mode;
+
+      if (mode !== "sample" && mode !== "live")
+        return "The web app did not say which work orders may be billed, so nothing was submitted.";
+
+      const description = app.description_text();
+
+      if (description === "")
+        return mode === "sample"
+          ? "Sample mode is on and this work order's description could not be read from this page, "
+            + "so it cannot be confirmed as a test work order. Nothing was submitted."
+          : null;
+
+      const marker = String(scope.marker || "");
+      const carries = marker !== "" && app.normalize_marker(description).includes(app.normalize_marker(marker));
+
+      if (carries === (mode === "sample")) return null;
+
+      return mode === "sample"
+        ? "Sample mode is on, but this page does not describe a test work order. Nothing was submitted."
+        : "This page describes a test work order, and the web app is set to real work only. "
+          + "Nothing was submitted.";
+    },
+
+    /** Keep identical to background/scope.js and App\Support\WorkOrderScope. */
+    normalize_marker(value) {
+      return String(value ?? "")
+        .replace(/[\u00a0\u200b]/g, " ")
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[\u201c\u201d]/g, '"')
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+    },
+
+    /**
+     * This work order's description, as the vendor portal has it right now.
+     *
+     * Read fresh, at the moment of acting, and never stored — the same
+     * discipline as the portal status. What it is compared against is the
+     * marker the *web app* supplies, so there is one copy of that string in the
+     * whole system and it is the server's.
+     *
+     * The dedicated hook first, because it is the invoices page's and the
+     * invoices page is where an invoice is typed. The labelled datapair second,
+     * because `.js-datapair` is generic furniture on the work-order page —
+     * address, permission to enter, maintenance limit and description are all
+     * the same class, so the label is the only thing that identifies it. That
+     * is the idiom maintenance_limit_cents() already uses.
+     *
+     * Returns "" when it cannot be read, which every caller treats as *not
+     * marked* rather than as *unknown*. In sample mode that refuses the job,
+     * which is the safe direction and is the point.
+     */
+    description_text() {
+      const hook = app.text(app.SELECTORS.detail_description);
+      if (hook !== "") return hook;
+
+      for (const pair of document.querySelectorAll(app.SELECTORS.datapair)) {
+        const label = pair.querySelector("label");
+        if (!/^description$/i.test((label?.textContent || "").trim())) continue;
+
+        const value = pair.cloneNode(true);
+        value.querySelector("label")?.remove();
+
+        return (value.textContent || "").replace(/\s+/g, " ").trim();
+      }
+
+      return "";
     },
 
     /**

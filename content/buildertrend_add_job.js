@@ -25,12 +25,13 @@
  *    first iteration unconditionally, so only the first chip was ever checked
  *    and a job already tagged Appfolio was tagged again.
  *
- * One known bug is deliberately left: simulateInputTyping writes input.value
- * directly instead of going through the native property setter, which is why
- * Ant Design's React-controlled fields sometimes revert. The correct fix is the
- * value-tracker bypass, and it is not worth doing here while this page's future
- * is undecided. It is why several fields need re-typing when Buildertrend
- * updates its UI.
+ * 5. **simulateInputTyping goes through the native property setter.** It used
+ *    to assign `input.value` directly, which React's value tracker cannot see —
+ *    so Ant Design's controlled fields reverted on the next render and the form
+ *    held something other than what was on screen. That was the cause of the
+ *    recurring "field resetting" reports, and it was deliberately left unfixed
+ *    while this page's future was undecided. It is decided: Buildertrend is
+ *    ASH's system of record for non-Camelot work.
  */
 
 (() => {
@@ -192,7 +193,15 @@
 
       // The same convention the web app derives its title with, so a job has
       // one name in both systems: "(number) street".
-      const jobTitle = "(" + workOrderNumber + ") " + workOrderStreet;
+      //
+      // The prefix is set by the service worker for one of Dustin's test work
+      // orders, and only there. Buildertrend has no test mode, so a job built
+      // from a sample is a real job in the same list as everything else, and
+      // its name is the only thing that will let anybody find them all again
+      // and delete them. Decided in background/buildertrend.js against a scope
+      // read from the server at the moment of filling, never here.
+      const titlePrefix = work_order.title_prefix || "";
+      const jobTitle = titlePrefix + "(" + workOrderNumber + ") " + workOrderStreet;
       const jobType = this.config.job_type;
       const jobGroup = this.config.job_group;
       const jobClient = this.config.bt_client_name;
@@ -595,13 +604,32 @@
       document.body.setAttribute("data-nss-processing", !bool);
     },
 
-    // Known limitation, left in place on purpose: this writes input.value
-    // directly rather than through the native property setter, so React's value
-    // tracker does not see the change and an Ant-controlled field can revert.
-    // See the note at the top of this file for why it is not fixed here.
+    // This used to write `input.value += char` directly, which bypasses React's
+    // value tracker: the tracker then believes the field never changed and
+    // reverts it on the next render, so the field looks filled and the form
+    // holds something else. That was the cause of the recurring "field
+    // resetting" reports, and it was left unfixed while Buildertrend's future
+    // was undecided.
+    //
+    // It is decided: Buildertrend is ASH's system of record for non-Camelot
+    // work, so it is staying, and a filler whose fields silently revert is not
+    // something to build an estimates leg on top of.
+    //
+    // The per-character keydown/keyup loop is kept. The value now goes in once,
+    // through the native setter, and the key events follow so that any handler
+    // listening for typing still hears it — dispatching them is cheap and
+    // removing them would be a second change in the same commit, against a live
+    // account, with no way to test which of the two mattered.
     simulateInputTyping: function (input, string) {
       if (!(input instanceof Element)) throw new Error("Invalid input.");
       if (typeof string !== "string") throw new Error("Invalid string.");
+
+      const prototype =
+        input instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+
+      const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
 
       for (const char of string) {
         const keydownEvent = new KeyboardEvent("keydown", {
@@ -619,10 +647,17 @@
         keyupEvent.synthetic = true;
 
         input.dispatchEvent(keydownEvent);
-        input.value += char;
+
+        const next = String(input.value ?? "") + char;
+
+        if (setter) setter.call(input, next);
+        else input.value = next;
+
         input.dispatchEvent(inputEvent);
         input.dispatchEvent(keyupEvent);
       }
+
+      input.dispatchEvent(new Event("change", { bubbles: true }));
     },
 
     simulateClick: function (element) {

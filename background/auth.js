@@ -197,5 +197,28 @@ export async function heartbeat() {
     checked_at: new Date().toISOString(),
   });
 
-  return { status: "signed_in", user };
+  return { status: "signed_in", user, scope: response.body?.scope || null };
+}
+
+/**
+ * Which population the web app will accept, asked fresh, right now.
+ *
+ * Nothing caches this and nothing may. It exists for the paths that act minutes
+ * after a page was read — the Buildertrend queue is drained from the popup, so
+ * the scope that was true when a row was ticked is not evidence of the scope
+ * that is true when the job is created.
+ *
+ * Null for every failure, without distinguishing them, because every caller
+ * does the same thing with every one of them: refuse. "Signed out" and "the
+ * server is down" are different problems and neither is a reason to guess which
+ * work orders may be written to Buildertrend.
+ */
+export async function scope() {
+  try {
+    const beat = await heartbeat();
+
+    return beat.status === "signed_in" ? beat.scope : null;
+  } catch {
+    return null;
+  }
 }

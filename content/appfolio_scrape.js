@@ -335,6 +335,59 @@
     });
   }
 
+  /**
+   * Does this description carry the web app's test-work-order marker?
+   *
+   * **The server is authoritative.** `App\Support\WorkOrderScope` runs the same
+   * comparison on every work order this sends, and refuses what it does not
+   * admit. This copy exists so a refusal happens on the page, beside the row,
+   * at the moment the manager is looking at it — rather than as twenty red
+   * lines in the popup a minute later.
+   *
+   * Because it is a second implementation it can drift, and the drift is safe
+   * in both directions: stricter here means a row is refused visibly and can be
+   * sent by hand, looser here means the server refuses it. Neither silently
+   * bills anybody, which is the only property that matters.
+   *
+   * The marker string is never hardcoded — it arrives on `scope` with every
+   * authenticated answer, so there is one copy of it and it is the server's.
+   *
+   * Substring rather than equality, and normalised first, for the reasons
+   * written out on the PHP side: a sentence appended to a test work order must
+   * not un-mark it, and a non-breaking space or a word processor's apostrophe
+   * is invisible in a browser and fatal to `===`.
+   */
+  function marked(description, marker) {
+    const text = normalize_marker(description);
+    const wanted = normalize_marker(marker);
+
+    return wanted !== "" && text.includes(wanted);
+  }
+
+  /**
+   * May this work order be sent, given the scope the server last stated?
+   *
+   * A missing or unrecognised scope answers **false**, always. Not knowing
+   * which population this installation is pointed at is not a reason to guess —
+   * the bar disables sending entirely in that case and says so.
+   */
+  function scope_admits(description, scope) {
+    const mode = scope?.mode;
+    if (mode !== "sample" && mode !== "live") return false;
+
+    return marked(description, scope?.marker) === (mode === "sample");
+  }
+
+  function normalize_marker(value) {
+    return String(value ?? "")
+      .replace(/[\u00a0\u200b]/g, " ")
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201c\u201d]/g, '"')
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
   /** Ask the service worker something, and never throw at the caller. */
   async function ask(type, payload = {}) {
     try {
@@ -358,6 +411,8 @@
     list_rows,
     fetch_detail,
     scrape_row,
+    marked,
+    scope_admits,
     query_element,
     wait_for,
     ask,

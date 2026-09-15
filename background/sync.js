@@ -581,10 +581,17 @@ export async function reconcile(numbers) {
  *
  * The failure is reported rather than swallowed, because the badges must be
  * able to say "unknown" instead of showing a remembered value as current.
+ *
+ * It also carries `scope` straight through from the answer — which population
+ * the web app will accept, and the marker that identifies it. Passed along
+ * rather than stored for the same reason the statuses are: a page that acted on
+ * a remembered mode would be acting on a question it had not asked. An empty
+ * page of numbers short-circuits before the call and therefore has no scope,
+ * which is correct — it also has no rows to send.
  */
 export async function statuses(numbers) {
   const wanted = [...new Set((numbers || []).map(String).filter((n) => n !== ""))];
-  if (wanted.length === 0) return { ok: true, work_orders: {} };
+  if (wanted.length === 0) return { ok: true, work_orders: {}, scope: null };
 
   try {
     const response = await api.lookup(wanted);
@@ -599,7 +606,11 @@ export async function statuses(numbers) {
         error: response.body?.error || `The web app answered ${response.status}.`,
       };
 
-    return { ok: true, work_orders: response.body?.work_orders || {} };
+    return {
+      ok: true,
+      work_orders: response.body?.work_orders || {},
+      scope: response.body?.scope || null,
+    };
   } catch (error) {
     return {
       ok: false,

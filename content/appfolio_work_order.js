@@ -9,6 +9,9 @@
  *
  * The badge follows the same rule as the list's. It is fetched live, and if the
  * web app cannot be reached it says so rather than showing anything remembered.
+ * So does the scope: both buttons refuse while it is unknown, and both say why.
+ * This page is one work order rather than fifty, so the refusal can be stated
+ * before anything is pressed instead of per row afterwards.
  */
 
 (() => {
@@ -18,6 +21,9 @@
     work_order: null,
     settings: {},
     busy: false,
+
+    /** Never remembered — see the list page's header. */
+    scope: null,
 
     async init() {
       const body = await nss.query_element(nss.SELECTORS.detail_body);
@@ -81,6 +87,32 @@
       note.className = `nss-detail__note nss-detail__note--${kind}`;
     },
 
+    /**
+     * Say what this page may do with this work order, and disable it if not.
+     *
+     * Both buttons are governed, Buildertrend included: a test work order
+     * imported there is a real Buildertrend job, and Buildertrend has no test
+     * mode to put it in.
+     */
+    paint_scope() {
+      const mode = app.scope?.mode === "sample" || app.scope?.mode === "live" ? app.scope.mode : null;
+      const admitted = mode !== null && nss.scope_admits(app.work_order?.description, app.scope);
+
+      for (const button of document.querySelectorAll(".nss-detail__go, .nss-detail__link"))
+        button.disabled = app.busy || !admitted;
+
+      if (admitted) return;
+
+      app.say(
+        mode === null
+          ? "The web app has not said which work orders it may hold, so this cannot be sent."
+          : mode === "sample"
+            ? "Sample mode is on, and this work order is not marked as a test work order."
+            : "This is a test work order, and the web app is set to real work only.",
+        "error",
+      );
+    },
+
     paint(label, kind, title = "") {
       const badge = document.getElementById("nss-detail-badge");
       if (!badge) return;
@@ -92,6 +124,9 @@
 
     async load_status() {
       const answer = await nss.ask("STATUSES", { numbers: [app.work_order.number] });
+
+      app.scope = answer?.ok ? answer.scope || null : null;
+      app.paint_scope();
 
       if (!answer?.ok) {
         app.paint(
@@ -124,6 +159,7 @@
 
     async send() {
       if (app.busy || !app.work_order) return;
+      if (!nss.scope_admits(app.work_order.description, app.scope)) return app.paint_scope();
 
       app.busy = true;
       app.say("Sending…");
@@ -147,6 +183,7 @@
 
     async queue_for_bt() {
       if (!app.work_order) return;
+      if (!nss.scope_admits(app.work_order.description, app.scope)) return app.paint_scope();
 
       await nss.ask("QUEUE_FOR_BT", { work_orders: [app.work_order] });
 

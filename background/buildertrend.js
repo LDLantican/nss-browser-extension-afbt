@@ -25,9 +25,24 @@
  * And it returns its outcome to the caller instead of broadcasting to the
  * popup. The popup is usually shut by then; notifications are how a finished
  * run gets seen now.
+ *
+ * ## The scope check is here, not at queue time
+ *
+ * A row is ticked on Appfolio and filled from the popup, and those are two
+ * different moments — sometimes an hour apart, with a queue that survives the
+ * browser restarting in between. The scope that was true when it was ticked is
+ * not evidence about the scope that is true when a real Buildertrend job is
+ * created, so it is asked again here, from the server, immediately before.
+ *
+ * Buildertrend has **no test mode**: a job built from one of Dustin's samples
+ * is a real job in the same list as everything else. So a sample gets a title
+ * prefix — the only thing that will let anybody find them again and delete
+ * them.
  */
 
 import { check_signed_in, show_sign_in } from "./portals.js";
+import { scope as current_scope } from "./auth.js";
+import { marked, scope_admits, SAMPLE_TITLE_PREFIX } from "./scope.js";
 
 const ADD_JOB_URL = "https://buildertrend.net/app/JobPage/0/1?openCondensed=true";
 const ADD_JOB_PATH = "/app/JobPage/0/";
@@ -40,6 +55,32 @@ const reported_tabs = new Set();
 export async function fill_job(work_order, config) {
   if (!work_order || typeof work_order !== "object")
     return { ok: false, error: "Invalid work order." };
+
+  /* Asked now rather than trusted from when the row was queued. Null for every
+     failure — signed out, unreachable, anything — because the answer to all of
+     them is the same and it is not "carry on". */
+  const scope = await current_scope();
+
+  if (scope === null)
+    return {
+      ok: false,
+      error:
+        "The web app has not said which work orders it may hold, so nothing was created in Buildertrend.",
+    };
+
+  if (!scope_admits(work_order.description, scope))
+    return {
+      ok: false,
+      error:
+        scope.mode === "sample"
+          ? "Sample mode is on, and that work order is not marked as a test work order. Nothing was created."
+          : "That is a test work order and the web app is set to real work only. Nothing was created.",
+    };
+
+  /* Buildertrend has no test mode, so the mark has to be in the job's name. */
+  const job = marked(work_order.description, scope.marker)
+    ? { ...work_order, title_prefix: SAMPLE_TITLE_PREFIX }
+    : work_order;
 
   /* A tab of our own, opened **unfocused** and focused a moment later.
    *
@@ -102,7 +143,7 @@ export async function fill_job(work_order, config) {
          handing it the web app's address and anything else in settings would be
          giving a third party's page our configuration for no reason. */
       payload: {
-        work_order,
+        work_order: job,
         config: {
           job_type: config?.job_type,
           job_group: config?.job_group,

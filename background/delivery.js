@@ -48,6 +48,7 @@
 
 import { api, fetch_photo, NetworkError } from "./api.js";
 import { check_signed_in, show_sign_in } from "./portals.js";
+import { scope_admits } from "./scope.js";
 
 const VENDOR_ORIGIN = "https://vendor.appfolio.com";
 const VENDOR_HOME = `${VENDOR_ORIGIN}/`;
@@ -77,6 +78,75 @@ let running = false;
 /** The tab this run uses, so a queue of forty opens one tab and not forty. */
 let delivery_tab_id = null;
 
+/**
+ * Set when a run filled an invoice that a person still has to submit.
+ *
+ * Module state because the thing that reads it is the `finally` in
+ * deliver_now(), which runs on the error path too — a run that threw after
+ * filling has left exactly the same page behind.
+ */
+let awaiting_submit = false;
+
+/**
+ * Where the unsubmitted invoice is, across service-worker restarts.
+ *
+ * `chrome.storage.session` rather than module state, because the worker is
+ * evicted after about thirty seconds idle and the next alarm would then drain
+ * straight over the top of a page somebody was about to press Submit on. Not
+ * `storage.local`, because this is true of a browsing session and not of an
+ * installation: a browser restart takes the tab with it, and a remembered URL
+ * with no tab behind it would stop the queue forever.
+ */
+const AWAITING_KEY = "nss_awaiting_submit_url";
+
+async function remember_awaiting(url) {
+  try {
+    await chrome.storage.session.set({ [AWAITING_KEY]: url });
+  } catch {
+    /* Storage is a convenience here; the in-run break below is what actually
+       stops a second invoice being filled over the first. */
+  }
+}
+
+async function clear_awaiting() {
+  try {
+    await chrome.storage.session.remove(AWAITING_KEY);
+  } catch {}
+}
+
+/**
+ * Is an invoice still sitting on screen waiting to be submitted?
+ *
+ * Answered by looking for the tab rather than by trusting the record, so the
+ * queue restarts on its own the moment somebody submits and navigates, or
+ * simply closes the tab. A remembered URL with nothing open behind it is
+ * cleared and ignored — the alternative is a queue that never moves again
+ * because of a page nobody can see.
+ */
+async function invoice_is_waiting() {
+  let url;
+
+  try {
+    ({ [AWAITING_KEY]: url } = await chrome.storage.session.get(AWAITING_KEY));
+  } catch {
+    return null;
+  }
+
+  if (!url) return null;
+
+  try {
+    const tabs = await chrome.tabs.query({ url });
+
+    if (tabs.length > 0) return url;
+  } catch {
+    return null;
+  }
+
+  await clear_awaiting();
+
+  return null;
+}
+
 export function start_delivery_schedule() {
   chrome.alarms.create(DRAIN_ALARM, { periodInMinutes: DRAIN_PERIOD_MINUTES });
 }
@@ -94,6 +164,32 @@ export function is_delivery_alarm(name) {
  */
 export async function deliver_now({ manual = false } = {}) {
   if (running) return { ok: true, skipped: "already running" };
+
+  /* One invoice at a time, because one person presses Submit at a time.
+   *
+   * With auto_submit off, a run fills the form and stops for somebody to press
+   * Submit Invoice. Draining the next job navigates the same tab and destroys
+   * that fill — which is what happened the first time two jobs were queued in
+   * this mode: the first was filled, checked to the cent, and then thrown away
+   * when the second took the tab. Only the last survived, and the next
+   * scheduled run would have taken that one too.
+   *
+   * So while an unsubmitted invoice is on screen, this does nothing. The tab's
+   * existence is the lock, which means it lifts by itself the moment she
+   * submits and navigates, or closes the tab. */
+  const waiting = await invoice_is_waiting();
+
+  if (waiting !== null)
+    return {
+      ok: true,
+      skipped: "awaiting_submit",
+      summary: {
+        awaiting_submit: true,
+        reason:
+          "An invoice is filled in and waiting to be submitted. Press Submit Invoice on that tab, "
+          + "then mark the job as delivered on /deliveries.",
+      },
+    };
 
   running = true;
 
@@ -116,6 +212,8 @@ export async function deliver_now({ manual = false } = {}) {
   /* Set by the first pass that has work, so the sign-in check runs once. */
   let preflighted = false;
 
+  awaiting_submit = false;
+
   try {
     for (let pass = 0; pass < 20; pass++) {
       const response = await api.deliveries("appfolio");
@@ -135,13 +233,33 @@ export async function deliver_now({ manual = false } = {}) {
       const queue = Array.isArray(response.body?.deliveries) ? response.body.deliveries : [];
       if (queue.length === 0) return { ok: true, summary, reports };
 
+      /* No scope, no run — before the first claim, so nothing spends an attempt
+         finding out.
+         
+         Every other option on this response has a safe default to fall back on;
+         this one does not, because it does not say *how* to write, it says
+         *what may be written to*. A run that guessed would be guessing between
+         a test work order and a real client's invoice, and the server sends it
+         on every branch of this answer precisely so that a missing one means
+         something is wrong rather than something is old. */
+      const scope = response.body?.scope || null;
+
+      if (scope?.mode !== "sample" && scope?.mode !== "live") {
+        summary.reason =
+          "The web app did not say which work orders it may deliver, so nothing was sent.";
+
+        return { ok: false, error: "scope_unknown", summary };
+      }
+
       const options = {
         auto_submit: response.body?.auto_submit !== false,
         dry_run: response.body?.dry_run === true,
         on_over_limit: response.body?.on_over_limit === "send" ? "send" : "block",
+        scope,
       };
 
       summary.dry_run = options.dry_run;
+      summary.scope = scope.mode;
 
       /* The guard, and the reason it sits exactly here.
        *
@@ -197,6 +315,17 @@ export async function deliver_now({ manual = false } = {}) {
            the same one up and rehearse it forever. One pass is the whole run. */
         if (options.dry_run) return { ok: true, summary, reports: reports.slice(0, 10) };
 
+        /* Filled and waiting for a person: stop here rather than filling the
+           next one over the top of it. See the note in deliver_now above. */
+        if (awaiting_submit) {
+          summary.awaiting_submit = true;
+          summary.reason =
+            "Filled one invoice and stopped. Press Submit Invoice on the tab left open, then mark "
+            + "the job as delivered.";
+
+          return { ok: true, summary };
+        }
+
         /* A signed-out portal fails every remaining job identically and would
            burn the whole queue's attempts doing it. */
         if (outcome === "signed_out") {
@@ -227,8 +356,20 @@ export async function deliver_now({ manual = false } = {}) {
 
     /* Left open on a manual run so a manager can see what happened; closed on a
        scheduled one so an unattended queue does not leave a tab behind every
-       minute. */
-    if (!manual) await close_delivery_tab();
+       minute.
+       
+       **And left open whenever a filled invoice is waiting to be submitted**,
+       scheduled or not. With auto_submit off, the run fills the form, checks
+       the total to the cent and reports "press Submit Invoice on the vendor
+       page" — and then this closed the page, so there was nothing to press and
+       the manager would have had to type the whole invoice again. The message
+       described a page that no longer existed.
+       
+       The tab-every-minute worry does not apply here, because the job is
+       reported `blocked` and `blocked` is not claimable: the queue will not
+       pick it up again next minute. One tab per invoice that needs a person,
+       which is exactly as many as there are people-shaped decisions waiting. */
+    if (!manual && !awaiting_submit) await close_delivery_tab();
   }
 }
 
@@ -295,6 +436,12 @@ async function deliver_one(delivery, options, reports) {
      URL is correct whatever the portal thinks of the job's state. */
   if (!delivery.target_url && url) api.remember_vendor_url(delivery.number, url).catch(() => null);
 
+  /* ---- does the page agree this is the population we may bill? --------- */
+
+  const wrong_population = scope_refusal(located.description, options.scope);
+
+  if (wrong_population !== null) return finish("blocked", wrong_population);
+
   /* ---- the portal's own verdict ---------------------------------------- */
 
   /* Deliberately here: after the URL is banked and before step B clicks
@@ -347,6 +494,13 @@ async function deliver_one(delivery, options, reports) {
     auto_submit: options.auto_submit,
     dry_run: options.dry_run,
     on_over_limit: options.on_over_limit,
+
+    /* Checked at step A too, on the work order's own page. Repeated here
+       because this is the page the invoice is actually typed into, and between
+       the two the run has posted notes and reloaded twice — the guard that
+       matters is the one on the page being written to, not the one two
+       navigations ago. */
+    scope: options.scope,
   });
 
   if (invoice?.ok !== true) {
@@ -354,6 +508,10 @@ async function deliver_one(delivery, options, reports) {
        `blocked` is a refusal nothing should retry; `unconfirmed` means Submit
        was pressed and the outcome is unknown; anything else is a clean failure
        with nothing sent. */
+    if (invoice?.awaiting_submit === true) {
+      awaiting_submit = true;
+      await remember_awaiting(`${url}/invoices`);
+    }
     if (invoice?.blocked === true) return finish("blocked", invoice.error);
     if (invoice?.unconfirmed === true) return finish("unconfirmed", invoice.error);
 
@@ -502,6 +660,7 @@ async function locate(delivery) {
         number: inspected.number || "",
         status: inspected.status || "",
         needs_accepting: inspected.needs_accepting === true,
+        description: inspected.description || "",
 
         /* No list was read on this path, so there is no badge and no tab. That
            is not a gap to paper over: portal_refusal() falls back to the
@@ -536,6 +695,7 @@ async function locate(delivery) {
     number: inspected.number || "",
     status: inspected.status || "",
     needs_accepting: inspected.needs_accepting === true,
+    description: inspected.description || "",
 
     /* Transient. Nothing persists these — the list row is gone by the next
        page load, and work_order_deliveries holds only target_url. They exist to
@@ -544,6 +704,50 @@ async function locate(delivery) {
     list_status: found.list_status || "",
     tabs: Array.isArray(found.tabs) ? found.tabs : [],
   };
+}
+
+/**
+ * The page's own answer to "may this be billed here", or null to proceed.
+ *
+ * The web app already answered it once — `work_orders.is_sample` was frozen
+ * when the job was admitted, and `DeliveryQueue::drain()` only offered jobs
+ * matching the current scope. This asks the vendor portal the same question
+ * about the same job, a second time, from a page nobody here wrote.
+ *
+ * The value is in the disagreement. Because the stored answer cannot move and
+ * this one is read fresh, the two *can* differ — somebody adding the marker to
+ * a real work order, or removing it from a test one — and that difference is
+ * caught here instead of becoming an invoice. Both halves of the check are
+ * needed: a stored flag alone cannot notice AppFolio changing under it, and a
+ * page read alone would just do whatever free text somebody last typed.
+ *
+ * `blocked`, not `failed`: nothing was written, a retry would not help, and a
+ * person has to look. It spends no attempt and does not feed the breaker.
+ *
+ * **An unreadable description blocks in sample mode and proceeds in live.**
+ * That asymmetry is deliberate. In sample mode this is the only thing standing
+ * between the run and a real client's work order, so it fails closed. In live
+ * mode the web app's own flag is the primary guard and has already passed, so
+ * a renamed class on AppFolio's side should not stop the day's billing for
+ * everybody. The check that protects a real client is the one that fails
+ * closed.
+ */
+function scope_refusal(description, scope) {
+  const text = String(description || "").trim();
+
+  if (text === "")
+    return scope.mode === "sample"
+      ? "Sample mode is on and this work order's description could not be read from the vendor page, "
+        + "so it cannot be confirmed as a test work order. Nothing was touched."
+      : null;
+
+  if (scope_admits(text, scope)) return null;
+
+  return scope.mode === "sample"
+    ? "Sample mode is on, but the vendor page does not describe this as a test work order. "
+      + "Nothing was touched."
+    : "The vendor page describes this as a test work order, and this web app is set to real work "
+      + "only. Nothing was touched.";
 }
 
 /**

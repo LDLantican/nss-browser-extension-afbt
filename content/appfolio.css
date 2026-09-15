@@ -136,6 +136,36 @@
   font-weight: 700;
 }
 
+/* Which population the web app will accept, as it last said.
+
+   Always present, including for `live`. A mode indicator that only shows up in
+   the unusual case teaches nobody what the usual case looks like, and the
+   question it answers — "is what I am about to send real?" — deserves a
+   standing answer rather than an occasional one. `unknown` is red and is the
+   only one of the three that also disables the button. */
+.nss-bar__scope {
+  padding: 2px 8px;
+  border: 1px dashed currentColor;
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.nss-bar__scope--sample {
+  color: #fcd34d;
+}
+
+.nss-bar__scope--live {
+  color: #6ee7b7;
+  border-style: solid;
+}
+
+.nss-bar__scope--unknown {
+  color: #fca5a5;
+}
+
 .nss-bar__link {
   padding: 0;
   border: 0;

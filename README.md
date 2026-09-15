@@ -70,8 +70,10 @@ sends what is ticked and optionally queues the same rows for Buildertrend.
 Nothing is ever ticked for you: not every AppFolio work order is ASH's, and
 there is no field that says which are, so the choice stays yours. The only two
 things the extension writes to the selection are finishing a shift-range you
-started and clearing rows it has just sent — and it does both the way the page
-would, so AppFolio's own counter never disagrees with what you see.
+started and clearing rows it has just sent — and it does both by clicking the
+box, so AppFolio's own counter never disagrees with what you see. (Setting
+`checked` and firing a `change` event does not update their counter; only a
+click does. Measured against the live list, not assumed.)
 
 A row is read by fetching its own work-order page and parsing it — confirmed
 working against a live list — rather than by clicking expand and reading the
@@ -122,14 +124,41 @@ headers at all.
 No build step, no dependencies, no bundler — the browser loads these files as
 they are.
 
-## Known limitation
+## Sample mode
 
-`simulateInputTyping` in `content/buildertrend_add_job.js` writes `input.value`
-directly instead of going through the native property setter, so React's value
-tracker does not see the change and an Ant Design field can revert. This is the
-cause of the recurring "field resetting" problems on the Buildertrend page.
+The web app is set to one population of work orders at a time, and says which on
+every answer it gives:
 
-It is left unfixed on purpose. The fix is the value-tracker bypass, it only
-affects Buildertrend, and Buildertrend's future is undecided — so the work would
-be spent re-earning timing behaviour against a live account for a system that
-may be switched off. If ASH commits to keeping Buildertrend, fix this first.
+- **sample** — only the work orders Dustin marks as tests in AppFolio, whose
+  description is `This is a test work order approved by Dustin.`
+- **live** — only real work orders.
+
+The bar on the AppFolio list states the mode permanently, and a ticked row the
+mode does not admit is refused there, on the row, with the reason — it stays
+ticked rather than disappearing. **If the web app cannot be reached, nothing can
+be sent at all**: the button says *mode unknown* and is disabled, because not
+knowing which population this app is pointed at is not a reason to guess. The
+*Retry status* link recovers it along with the badges.
+
+The extension never remembers the mode, and never carries its own copy of the
+marker text. Both arrive from the web app, and the web app checks everything it
+is sent again regardless.
+
+Two places it matters beyond the list. Buildertrend has no test mode, so a job
+built from a sample is a real Buildertrend job — it gets a `[TEST] ` title
+prefix so those can be found and deleted, and the mode is re-read from the
+server at the moment the job is filled rather than when the row was queued.
+And before an invoice is typed into the AppFolio vendor portal, the extension
+re-reads that work order's description **off the vendor page itself** and stops
+if it disagrees with what the web app holds.
+
+## Previously known limitation, now fixed
+
+`simulateInputTyping` in `content/buildertrend_add_job.js` used to write
+`input.value` directly instead of going through the native property setter, so
+React's value tracker did not see the change and Ant Design fields reverted.
+That was the cause of the recurring "field resetting" problems.
+
+It was left unfixed while Buildertrend's future was undecided. It is decided —
+Buildertrend is ASH's system of record for non-Camelot work orders — so the
+value now goes in through the native setter.

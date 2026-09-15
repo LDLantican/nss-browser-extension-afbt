@@ -39,6 +39,20 @@
  * manager decides whether to sync a row by reading it, so a badge that might be
  * an hour stale is worse than a badge that admits it does not know — the first
  * causes a wrong decision quietly and the second causes a click.
+ *
+ * ## Scope, which follows exactly that rule
+ *
+ * The web app is set to one population of work orders — Dustin's test ones, or
+ * real ones — and it says which on the same answer the badges come from. The
+ * bar states it permanently, and a row the scope does not admit is refused
+ * here, on the row, rather than being sent and bounced.
+ *
+ * **With no scope in hand nothing can be sent at all.** Not knowing which
+ * population this app is pointed at is not a reason to guess: the button says
+ * "mode unknown" and is disabled, and the retry link that was already there for
+ * the badges recovers both at once. The cost is a click; the alternative is a
+ * real client's work order posted to a machine that only wanted tests, or the
+ * reverse.
  */
 
 (() => {
@@ -60,6 +74,16 @@
 
     /** Set while a sync is in flight, so the bar cannot be double-fired. */
     busy: false,
+
+    /**
+     * Which work orders this web app may hold, as it last said.
+     *
+     * Null until the status lookup answers, and back to null the moment it
+     * fails — never a remembered value, for the same reason the badges beside
+     * it are never remembered. Sending the wrong population is not a mistake a
+     * retry fixes, so with no scope in hand the bar refuses to send at all.
+     */
+    scope: null,
 
     /** Kept so a re-init cannot leave two observers counting the same page. */
     selection_observer: null,
@@ -137,18 +161,39 @@
     },
 
     /**
-     * Tick or untick a row as Appfolio would have.
+     * Tick or untick a row as Appfolio would have — by clicking it.
      *
-     * The dispatch is not optional. Appfolio keeps its own "N Selected" and its
-     * own Bulk Actions state; a box changed behind its back leaves the page
-     * disagreeing with itself, which is a worse bug than the one this file was
-     * rewritten to fix.
+     * This used to assign `checked` and dispatch a bubbling `change`, on the
+     * reasoning that Appfolio keeps its own "N Selected" and its own Bulk
+     * Actions state and a box changed behind its back leaves the page
+     * disagreeing with itself. The reasoning was right and the method did not
+     * work, which is worth writing down because it looks like it should.
+     *
+     * Measured against the live list on 15 September 2026, one row, fresh load:
+     *
+     *   a real click                       0 Selected -> 1 Selected
+     *   checked = false + change event     1 Selected -> 1 Selected   (box unticked)
+     *   native setter + change event       2 Selected -> 2 Selected   (box unticked)
+     *   box.click()                        2 Selected -> 1 Selected
+     *
+     * So this is **not** the React value-tracker problem that
+     * content/buildertrend_add_job.js had, and the native-setter fix that cured
+     * that one does nothing here: Appfolio's counter is driven by a click
+     * handler, not by a controlled input's value. Only a click event updates it.
+     *
+     * The cost is that every programmatic tick now dispatches a real click that
+     * bubbles to our own listener too, which is why on_click() ignores anything
+     * that is not `isTrusted`.
+     *
+     * What this was leaving behind: after every sync, the rows the extension
+     * had just cleared stayed in Appfolio's count and in its Bulk Actions
+     * selection — a menu whose items are Complete, Ready to Bill, Assign,
+     * Cancel and Print.
      */
     set_checked(row, wanted) {
       if (!row?.box || row.box.checked === wanted) return;
 
-      row.box.checked = wanted;
-      row.box.dispatchEvent(new Event("change", { bubbles: true }));
+      row.box.click();
     },
 
     watch_selection(list) {
@@ -201,6 +246,13 @@
       const box = event.target;
       if (!box?.matches?.(nss.SELECTORS.row_select)) return;
 
+      /* set_checked() ticks by clicking now, so our own writes arrive here as
+         well. Only a person starts a range or moves the anchor — an untrusted
+         click has no shiftKey to read and no intent behind it, and letting one
+         move `anchor` would leave the next shift-click measuring from a row
+         nobody touched. */
+      if (!event.isTrusted) return;
+
       const row = app.row_of(box);
       if (!row) return;
 
@@ -231,6 +283,8 @@
       app.paint_badges("checking…", "loading");
 
       const answer = await nss.ask("STATUSES", { numbers });
+
+      app.scope = answer?.ok ? answer.scope || null : null;
 
       if (!answer?.ok) {
         /* The honest state. Not a cached value, not a blank — the row says it
@@ -308,6 +362,7 @@
 
       const count = app.selected_rows().length;
       const bt = app.settings.buildertrend_enabled !== false;
+      const mode = app.scope?.mode === "sample" || app.scope?.mode === "live" ? app.scope.mode : null;
 
       bar.innerHTML = "";
 
@@ -325,6 +380,26 @@
           : `${count} selected`;
 
       left.appendChild(tally);
+
+      /* Always shown, including when it is `live`. A mode indicator that only
+         appears in the unusual case teaches nobody what the usual case is, and
+         the question this answers — "is what I am about to send real?" — is
+         worth a permanent answer rather than an occasional one. */
+      const scope = document.createElement("span");
+      scope.className = `nss-bar__scope nss-bar__scope--${mode || "unknown"}`;
+      scope.textContent =
+        mode === "sample"
+          ? "sample mode — test work orders only"
+          : mode === "live"
+            ? "live — real work orders only"
+            : "mode unknown";
+      scope.title =
+        mode === null
+          ? "The web app has not said which work orders it may hold, so nothing can be sent."
+          : `Only work orders whose description ${mode === "sample" ? "carries" : "does not carry"} `
+            + `"${app.scope.marker || ""}" will be accepted.`;
+
+      left.appendChild(scope);
 
       if (bar.dataset.statusError === "1") {
         const retry = document.createElement("button");
@@ -358,12 +433,14 @@
       const send = document.createElement("button");
       send.type = "button";
       send.className = "nss-bar__go";
-      send.disabled = count === 0 || app.busy;
+      send.disabled = count === 0 || app.busy || mode === null;
       send.textContent = app.busy
         ? "Reading Appfolio…"
-        : count === 0
-          ? "Sync to web app"
-          : `Sync ${count} to web app`;
+        : mode === null
+          ? "Mode unknown — cannot sync"
+          : count === 0
+            ? "Sync to web app"
+            : `Sync ${count} to web app`;
 
       send.addEventListener("click", () => app.send());
       right.appendChild(send);
@@ -391,6 +468,15 @@
       app.render_bar();
     },
 
+    /** One wording for the two places that report a scope refusal. */
+    refusal_reason(count) {
+      const rows = count === 1 ? "1 is" : `${count} are`;
+
+      return app.scope?.mode === "sample"
+        ? `${rows} not marked as a test work order, and sample mode is on.`
+        : `${rows} a test work order, and this web app is set to real work only.`;
+    },
+
     /* ---- sending --------------------------------------------------------- */
 
     /**
@@ -404,10 +490,27 @@
      * A row that cannot be read is reported and skipped. It is not sent as a
      * blank work order — the web app would take it, and a job with no address
      * is worse in a billing record than a job that is missing.
+     *
+     * **A row outside the web app's scope is skipped the same way**, and for
+     * the same reason: it is better refused here, on the row, than accepted and
+     * bounced. The check has to happen after the scrape rather than before,
+     * because the description only exists on the work order's own page — the
+     * list row does not carry it, and fetching fifty detail pages to paint
+     * fifty badges nobody asked for would hammer the portal a manager is
+     * working in. The server checks it again anyway.
      */
     async send() {
       const rows = app.selected_rows();
       if (app.busy || rows.length === 0) return;
+
+      /* The bar already disables the button; this is the second answer to the
+         same question, because the button's state is a render away from the
+         truth and this is not. */
+      if (app.scope === null) {
+        app.say("The web app has not said which work orders it may hold. Retry status first.", "error");
+
+        return;
+      }
 
       app.busy = true;
       app.message = null;
@@ -416,12 +519,29 @@
       const work_orders = [];
       const handed_over = [];
       const failed = [];
+      const refused = [];
 
       for (const [index, row] of rows.entries()) {
         app.paint_badge(row.number, `reading ${index + 1} of ${rows.length}…`, "loading");
 
         try {
-          work_orders.push(await nss.scrape_row(row));
+          const work_order = await nss.scrape_row(row);
+
+          if (!nss.scope_admits(work_order.description, app.scope)) {
+            refused.push(row.number);
+            app.paint_badge(
+              row.number,
+              app.scope.mode === "sample" ? "not a test work order" : "test work order",
+              "error",
+              app.scope.mode === "sample"
+                ? "Sample mode is on, so only work orders whose description carries the test marker are sent."
+                : "This is a test work order, and this web app is set to real work only.",
+            );
+
+            continue;
+          }
+
+          work_orders.push(work_order);
           handed_over.push(row);
           app.paint_badge(row.number, "sending…", "loading");
         } catch (error) {
@@ -432,7 +552,12 @@
 
       if (work_orders.length === 0) {
         app.busy = false;
-        app.say("Could not read any of the selected work orders from Appfolio.", "error");
+        app.say(
+          refused.length === 0
+            ? "Could not read any of the selected work orders from Appfolio."
+            : `None of those can be sent: ${app.refusal_reason(refused.length)}`,
+          "error",
+        );
 
         return;
       }
@@ -454,13 +579,18 @@
       for (const row of handed_over) app.set_checked(row, false);
 
       const sent = result?.queued ?? work_orders.length;
+      const notes = [`${sent} sent to the web app.`];
 
-      app.say(
-        failed.length === 0
-          ? `${sent} sent to the web app. Watch the toolbar icon for the result.`
-          : `${sent} sent. ${failed.length} could not be read and are still selected: ${failed.join(", ")}.`,
-        failed.length === 0 ? "ok" : "warn",
+      if (refused.length > 0) notes.push(app.refusal_reason(refused.length) + ` ${refused.join(", ")}.`);
+      if (failed.length > 0) notes.push(`${failed.length} could not be read: ${failed.join(", ")}.`);
+
+      notes.push(
+        refused.length === 0 && failed.length === 0
+          ? "Watch the toolbar icon for the result."
+          : "Anything not sent is still selected.",
       );
+
+      app.say(notes.join(" "), refused.length === 0 && failed.length === 0 ? "ok" : "warn");
 
       /* Re-read from the web app rather than assuming the send worked. The
          badges then show what the app actually holds, which is the same
