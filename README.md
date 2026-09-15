@@ -10,8 +10,16 @@ other:
 - **Buildertrend** — the old destination, still working, unchanged, and
   switchable off in Settings the day ASH stops using it.
 
-Neither leg can break the other. Turning Buildertrend off removes its controls
-and its queue and changes nothing about the web app.
+Turning Buildertrend off in Settings removes its controls and its queue and
+changes nothing about the web app.
+
+**The reverse is no longer true, deliberately.** The Buildertrend leg re-reads
+from the web app, at the moment of filling, which population of work orders this
+installation may touch — so a web app that cannot be reached stops jobs being
+created in Buildertrend even though Buildertrend itself is fine. That is the
+owner's rule applied to the obvious failure: a work order must not end up in one
+system and not the other, and the way to honour that is to refuse rather than to
+guess on a stale answer about whether something is test data.
 
 ## Why the web app
 
@@ -57,6 +65,23 @@ slash is normalized away and does not count as a change. Saving the Buildertrend
 settings never signs anybody out.
 
 ## Using it
+
+**Syncing writes to both places.** Ticked rows go to the web app first — it is
+the system of record, and the fast, reliable half — and then a Buildertrend job
+is created for each, one at a time, in one tab. There is no "also queue for
+Buildertrend" checkbox any more: a job has to exist in both, so making the second
+one optional was the wrong shape, and the checkbox's state lived only in the bar
+and reset on every re-render, so ticking it and then sorting the list silently
+lost it.
+
+A work order the web app already holds a Buildertrend URL for is **skipped**
+rather than created again. That is the only duplicate check available — there is
+no API to ask Buildertrend whether a job exists — and without it a re-run after
+an unconfirmed save makes a second real job.
+
+If Buildertrend fails, the web app still has the work order and knows it has no
+Buildertrend job. Nothing is silently out of step; finishing the missing half is
+a re-run rather than an investigation.
 
 **On the AppFolio work-order list**, rows are chosen with **AppFolio's own row
 checkboxes** — the ones that drive their header select-all and their "N

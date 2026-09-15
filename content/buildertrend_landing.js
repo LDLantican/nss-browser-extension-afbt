@@ -1,0 +1,171 @@
+/**
+ * Finding the job Buildertrend just saved, on the page it lands on.
+ *
+ * ## Why this page at all
+ *
+ * Saving a new job does not take you to the job. Buildertrend redirects to
+ * `/app/Landing`, and the id appears nowhere in the URL at any point of the
+ * journey.
+ *
+ * That matters because the whole reason the extension creates the job is so an
+ * estimate can be attached to it later, and an estimate needs to know *which*
+ * job. The id has to be read from somewhere, and Landing is where it becomes
+ * knowable.
+ *
+ * ## Why it searches rather than reads the selection
+ *
+ * This file used to read the *selected* job, on the assumption that saving one
+ * selects it. **It does not.** Measured against a live page: after saving
+ * `(19410-1)`, Landing still showed `(19409-1)` as the selected job in
+ * `landingPageUserJob`, `jobName` and the picker header. Reading the selection
+ * would have recorded the previous job's id against the new work order — two
+ * work orders pointing at one Buildertrend job, which is exactly the kind of
+ * wrong a billing link must never be.
+ *
+ * The title check caught it and refused, so nothing was recorded. That was the
+ * right outcome from a wrong premise, and the premise is what changed here.
+ *
+ * The job picker is the fix. It is a docked sidebar on Landing — not a popup,
+ * nothing to open — and it carries the id where the selection never did: each
+ * row is `[data-testid='JobListItem-<id>']` with the job's title as its text.
+ * The list is virtualised over ~900 jobs, so it is filtered by the work-order
+ * number first and only then matched, which is why the search box is driven at
+ * all.
+ *
+ * ## Why it still refuses rather than guesses
+ *
+ * The match is on the **exact** title, and two jobs sharing one refuses both.
+ * Being unable to identify a job that really was saved is recoverable — the
+ * work order visibly has no link and the manager is told to look — while
+ * recording the wrong id is a silent, permanent mispointing that the estimate
+ * leg would then bill against. It is the same rule the client row id follows on
+ * the new-job form: trusting whichever row comes back first is worse than
+ * requiring a match.
+ *
+ * ## The search box is left as it was found
+ *
+ * This runs in the manager's own tab, on a page they are looking at. A filter
+ * left in the picker is this extension's debris in somebody else's UI, so the
+ * box is cleared on the way out whether the lookup succeeded or not.
+ */
+
+(() => {
+  const SEARCH = "input[data-testid='JobSearch']";
+  const ROW = "[data-testid^='JobListItem-']";
+
+  /* Long enough for a virtualised list over ~900 jobs to filter and paint, and
+     short enough that the caller's own retry loop still gets several goes
+     inside its budget. */
+  const LOOKUP_BUDGET_MS = 12000;
+  const POLL_MS = 250;
+
+  const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /**
+   * Type into the search box the way React can see.
+   *
+   * The picker's search is a genuine `<input>`, so the value tracker applies
+   * here exactly as it does on the new-job form: assigning `.value` leaves
+   * React's last-known value untouched and the `input` event is discarded as a
+   * no-op. Unlike the job-type field on that form, this one is not a `<div>`
+   * wearing an input's name — so the setter is safe to call, and needed.
+   */
+  function type_into(input, value) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+
+    if (setter) setter.call(input, value);
+    else input.value = value;
+
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  /** Poll until `read` answers with something truthy, or the budget runs out. */
+  async function wait_for(read, budget) {
+    const until = Date.now() + budget;
+
+    for (;;) {
+      const value = read();
+
+      if (value) return value;
+      if (Date.now() >= until) return null;
+
+      await sleep(POLL_MS);
+    }
+  }
+
+  /**
+   * The picker's rows, as `{ id, title }`.
+   *
+   * `JobListItem-0` is the list's own "View N Jobs" header rather than a job,
+   * which is why the id has to be a real number and not merely present.
+   */
+  function rows() {
+    return [...document.querySelectorAll(ROW)]
+      .map((element) => ({
+        id: (element.getAttribute("data-testid") || "").replace("JobListItem-", ""),
+        title: clean(element.textContent),
+      }))
+      .filter((row) => /^[1-9]\d*$/.test(row.id));
+  }
+
+  async function find_job(title, query) {
+    const wanted = clean(title);
+
+    if (wanted === "") return { ok: false, error: "No job title was given to look for." };
+
+    /* Landing paints its picker after the redirect settles, so the box is
+       waited for rather than assumed. */
+    const search = await wait_for(() => document.querySelector(SEARCH), LOOKUP_BUDGET_MS);
+
+    if (search === null)
+      return { ok: false, error: "Buildertrend's job list did not load, so nothing was recorded." };
+
+    type_into(search, query);
+
+    const matches = await wait_for(() => {
+      const found = rows().filter((row) => row.title === wanted);
+
+      return found.length > 0 ? found : null;
+    }, LOOKUP_BUDGET_MS);
+
+    type_into(search, "");
+
+    if (matches === null)
+      return {
+        ok: false,
+        error: `Buildertrend's job list did not show "${wanted}", so nothing was recorded.`,
+      };
+
+    const ids = new Set(matches.map((match) => match.id));
+
+    if (ids.size > 1)
+      return {
+        ok: false,
+        error:
+          `Buildertrend has more than one job called "${wanted}", so none of them was recorded. `
+          + "Check which one is the new job before running it again.",
+      };
+
+    const id = [...ids][0];
+
+    return { ok: true, id, url: `${location.origin}/app/JobPage/${id}/1` };
+  }
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type !== "LANDING_FIND_JOB") return false;
+
+    const title = message.payload?.title || "";
+
+    /* The number is the narrow, unique half of the title and the only part
+       worth filtering ~900 jobs by. Falling back to the whole title keeps this
+       working if a work order somehow arrives without one. */
+    const query = clean(message.payload?.number) || clean(title);
+
+    find_job(title, query)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+
+    return true;
+  });
+})();

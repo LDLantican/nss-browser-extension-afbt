@@ -413,20 +413,18 @@
       const right = document.createElement("div");
       right.className = "nss-bar__right";
 
+      /* There used to be an "also queue for Buildertrend" checkbox here, and it
+         was the wrong shape twice over: it made the second destination optional
+         when a job has to exist in both, and its state lived only in the bar's
+         dataset, so it reset on every re-render and every page change. A
+         manager who ticked it, sorted the list, and pressed Sync got the web
+         app and nothing else.
+
+         Syncing now means both. This says so, rather than asking. */
       if (bt) {
-        const also = document.createElement("label");
+        const also = document.createElement("span");
         also.className = "nss-bar__also";
-
-        const box = document.createElement("input");
-        box.type = "checkbox";
-        box.id = "nss-also-bt";
-        box.checked = bar.dataset.alsoBt === "1";
-        box.addEventListener("change", () => {
-          bar.dataset.alsoBt = box.checked ? "1" : "";
-        });
-
-        also.appendChild(box);
-        also.appendChild(document.createTextNode(" also queue for Buildertrend"));
+        also.textContent = "and Buildertrend";
         right.appendChild(also);
       }
 
@@ -439,8 +437,8 @@
         : mode === null
           ? "Mode unknown — cannot sync"
           : count === 0
-            ? "Sync to web app"
-            : `Sync ${count} to web app`;
+            ? "Sync"
+            : `Sync ${count}`;
 
       send.addEventListener("click", () => app.send());
       right.appendChild(send);
@@ -564,11 +562,19 @@
 
       const result = await nss.ask("SYNC", { work_orders });
 
-      if (app.settings.buildertrend_enabled !== false) {
-        const bar = document.getElementById(PANEL_ID);
+      /* Both destinations, every time. The web app first because it is the
+         system of record and the fast, reliable half — if Buildertrend then
+         fails, the gap is recorded rather than lost, and `buildertrend_url IS
+         NULL` on the server is what names it.
 
-        if (bar?.dataset.alsoBt === "1")
-          await nss.ask("QUEUE_FOR_BT", { work_orders });
+         Not awaited: the run opens a tab and works through the queue one job at
+         a time, which takes minutes for a full page of rows. Holding the bar
+         busy for that would stop a manager doing anything else in Appfolio, and
+         the queue is durable — a browser closed mid-run picks up where it left
+         off. The notification at the end is the report. */
+      if (app.settings.buildertrend_enabled !== false) {
+        await nss.ask("QUEUE_FOR_BT", { work_orders });
+        nss.ask("RUN_BT_QUEUE");
       }
 
       app.busy = false;

@@ -500,8 +500,14 @@
             }
           }
 
-          // A saved job gets its own id, so leaving the "new job" page (id 0)
-          // is itself proof the save went through.
+          // Kept, and worth knowing it has never once fired: saving does NOT
+          // take you to the job. Buildertrend redirects to /app/Landing, which
+          // matches nothing here, so the green toast above has always been what
+          // actually detected a save. Left in place because it costs a regex
+          // and would be the right answer if that redirect ever changed.
+          //
+          // The job's id is read off /app/Landing instead — see
+          // content/buildertrend_landing.js.
           const jobPageId = location.pathname.match(/\/JobPage\/(\d+)/i);
           if (jobPageId && jobPageId[1] !== "0")
             return { result: "success", message: "" };
@@ -620,16 +626,47 @@
     // listening for typing still hears it — dispatching them is cheap and
     // removing them would be a second change in the same commit, against a live
     // account, with no way to test which of the two mattered.
+    // The native `value` setter for whatever this element actually is, or null
+    // when it is not a field at all.
+    //
+    // **The null case is the whole reason this exists.** `inputJobType` is
+    // `.ant-select-selector:has(#jobInfo\.groupedProjectType)` — Ant Design's
+    // Select *wrapper div*, not an input — and the first version of the
+    // value-tracker fix chose `HTMLInputElement.prototype` for anything that
+    // was not a textarea, then called its setter with that div as the receiver.
+    // That throws `Illegal invocation`, which unwound to fillOut()'s catch and
+    // would have failed every single job on the first character of the job
+    // type.
+    //
+    // Assigning `.value` on a div is a harmless expando, which is what the code
+    // did for years and why nobody noticed that typing the job type has never
+    // done anything: the dropdown is opened by the click and the option is
+    // found by `[data-searchvalue=...]` unfiltered. So the div keeps the
+    // harmless no-op, and only real fields get the tracker fix.
+    nativeValueSetter: function (element) {
+      if (element instanceof HTMLTextAreaElement)
+        return Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set || null;
+
+      if (element instanceof HTMLInputElement)
+        return Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set || null;
+
+      return null;
+    },
+
+    // Write through the tracker where there is one, and fall back to plain
+    // assignment where there is not. Both typing and backspacing go through
+    // here, because clearing a field invisibly and then typing into it visibly
+    // is the same bug wearing the other shoe.
+    setFieldValue: function (element, value) {
+      const setter = this.nativeValueSetter(element);
+
+      if (setter) setter.call(element, value);
+      else element.value = value;
+    },
+
     simulateInputTyping: function (input, string) {
       if (!(input instanceof Element)) throw new Error("Invalid input.");
       if (typeof string !== "string") throw new Error("Invalid string.");
-
-      const prototype =
-        input instanceof HTMLTextAreaElement
-          ? HTMLTextAreaElement.prototype
-          : HTMLInputElement.prototype;
-
-      const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
 
       for (const char of string) {
         const keydownEvent = new KeyboardEvent("keydown", {
@@ -648,10 +685,7 @@
 
         input.dispatchEvent(keydownEvent);
 
-        const next = String(input.value ?? "") + char;
-
-        if (setter) setter.call(input, next);
-        else input.value = next;
+        this.setFieldValue(input, String(input.value ?? "") + char);
 
         input.dispatchEvent(inputEvent);
         input.dispatchEvent(keyupEvent);
@@ -714,7 +748,7 @@
         keyupEvent.synthetic = true;
 
         input.dispatchEvent(keydownEvent);
-        input.value = input.value.slice(0, -1);
+        this.setFieldValue(input, String(input.value ?? "").slice(0, -1));
         input.dispatchEvent(inputEvent);
         input.dispatchEvent(keyupEvent);
       }

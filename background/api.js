@@ -256,6 +256,14 @@ export const api = {
       query: { numbers: numbers.join(",") },
     }),
 
+  /* Where a work order ended up in BuilderTrend.
+     
+     The server fills a null and never overwrites, so a 200 with
+     `recorded: false` means "it already had one" — which is the answer that
+     stops a second job being created, not an error. */
+  remember_buildertrend: (number, url) =>
+    request("POST", "/api/work-orders/buildertrend", { body: { number, url } }),
+
   /* Delivery. The first calls that ask the web app for work rather than giving
      it some, so these are the only ones whose *answer* is a queue.
 

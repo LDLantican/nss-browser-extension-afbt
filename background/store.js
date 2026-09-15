@@ -18,6 +18,7 @@ const KEYS = {
   settings: "settings",
   sync: "sync_jobs",
   bt_queue: "bt_queue",
+  bt_unrecorded: "bt_unrecorded",
 };
 
 const DEFAULT_SETTINGS = {
@@ -126,6 +127,29 @@ export function bt_queue() {
 
 export function update_bt_queue(mutator) {
   return update(KEYS.bt_queue, {}, mutator);
+}
+
+/**
+ * Jobs that exist in Buildertrend but whose URL the web app has not accepted:
+ * work-order number => url.
+ *
+ * This is the one state the two-destination rule cannot express. A job created
+ * in Buildertrend and recorded nowhere is *worse* than one never created: the
+ * server still reads `buildertrend_url IS NULL`, so the next sync would create
+ * a **second real job**, and two jobs sharing a title make the id unfindable
+ * for both — the picker refuses an ambiguous match, by design.
+ *
+ * So a link that could not be recorded is neither dropped (losing it) nor left
+ * in `bt_queue` (which would re-create it). It waits here, is retried at the
+ * top of every run, and needs no browser to settle — it is one POST to our own
+ * server, not a form to fill again.
+ */
+export function bt_unrecorded() {
+  return read(KEYS.bt_unrecorded, {});
+}
+
+export function update_bt_unrecorded(mutator) {
+  return update(KEYS.bt_unrecorded, {}, mutator);
 }
 
 /**

@@ -26,10 +26,12 @@ import {
   clear_auth,
   bt_queue,
   update_bt_queue,
+  bt_unrecorded,
+  update_bt_unrecorded,
 } from "./store.js";
 import { notify, set_badge } from "./notify.js";
-import { normalize_base, origin_pattern } from "./api.js";
-import { fill_job } from "./buildertrend.js";
+import { api, normalize_base, origin_pattern } from "./api.js";
+import { fill_job, run_queue } from "./buildertrend.js";
 import {
   deliver_now,
   is_delivery_alarm,
@@ -365,7 +367,171 @@ const handlers = {
 
     return fill_job(work_order, config);
   },
+
+  /**
+   * Create every queued BuilderTrend job, one after another, in one tab.
+   *
+   * Started by the AppFolio sync rather than by a button, because the point of
+   * this leg is that a manager ticks rows, presses Sync once, and the work
+   * orders land in both places. Twenty rows must not be twenty button presses.
+   *
+   * Nothing is created for a work order the web app already has a BuilderTrend
+   * URL for. That is the only idempotency available — BuilderTrend has no API
+   * to ask whether a job exists, and the queue clears only on a positive save
+   * signal sent fire-and-forget from a tab that may be closed a second later.
+   * Without this check a re-run makes a second real job.
+   */
+  async RUN_BT_QUEUE() {
+    const config = await settings();
+
+    if (config.buildertrend_enabled === false)
+      return { ok: false, error: "Buildertrend is switched off in Settings." };
+
+    const queue = await bt_queue();
+    const rows = Object.values(queue);
+
+    if (rows.length === 0) return { ok: true, summary: { created: 0, failed: 0, skipped: 0 } };
+
+    /* One lookup for the whole batch rather than one per job. A web app that
+       cannot be reached answers nothing, and then nothing is skipped — which is
+       the safe direction only because fill_job refuses on its own when the
+       scope cannot be read. */
+    const already = new Set();
+
+    try {
+      const answer = await api.lookup(rows.map((row) => String(row.number)));
+
+      if (answer.ok)
+        for (const [number, held] of Object.entries(answer.body?.work_orders || {}))
+          if ((held?.buildertrend_url || "") !== "") already.add(String(number));
+    } catch {
+      /* Left empty on purpose; see above. */
+    }
+
+    /* Anything left over from a previous run goes first: it is a single POST to
+       our own server and, until it lands, the work order looks to everything
+       else like a job that was never created. */
+    await flush_unrecorded();
+
+    const outstanding = rows.filter((row) => !already.has(String(row.number)));
+
+    if (already.size > 0) await drop_from_bt_queue([...already]);
+
+    if (outstanding.length === 0)
+      return { ok: true, summary: { created: 0, failed: 0, skipped: 0, already: already.size } };
+
+    const summary = await run_queue(outstanding, config, async (outcome) => {
+      if (!outcome.ok) return;
+
+      /* The job exists in Buildertrend from here on, so this row must leave the
+         queue whatever happens next: leaving it would create a second real job
+         on the next run, and two jobs sharing a title make the id unfindable
+         for both. What must not happen is losing the link, so a URL that the
+         server will not take is parked rather than dropped. */
+      await drop_from_bt_queue([outcome.number]);
+
+      if (!outcome.url) return;
+
+      if (!(await record_link(outcome.number, outcome.url)))
+        await park_unrecorded(outcome.number, outcome.url);
+    });
+
+    summary.already = already.size;
+    summary.unrecorded = Object.keys(await bt_unrecorded()).length;
+
+    /* One notification for the run, not one per job: notify.js reuses a single
+       id, so per-job messages would overwrite each other and only the last
+       would ever be readable. */
+    notify("Buildertrend", bt_run_message(summary));
+
+    return { ok: true, summary };
+  },
 };
+
+/**
+ * Tell the web app where a job ended up, and say plainly whether it took it.
+ *
+ * `request()` answers `{ ok: false }` for an HTTP error rather than throwing —
+ * the same shape `api.lookup` is read for a few lines above — so the `.catch()`
+ * this used to rely on fired only for a dead network. A 401, a 422 or a 500
+ * sailed straight through as success and the link was dropped on the next line.
+ *
+ * `recorded: false` is not a failure: it means the work order already had a
+ * URL, which is the answer that prevents a second job rather than an error.
+ */
+async function record_link(number, url) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+
+    try {
+      const answer = await api.remember_buildertrend(number, url);
+
+      if (answer?.ok === true) return true;
+
+      /* A refusal is settled, not slow. Retrying a 422 just delays the parking
+         and a 404 means the work order is not there to record against. */
+      if (answer?.status === 422 || answer?.status === 404) return false;
+    } catch {
+      /* Network. Worth another go. */
+    }
+  }
+
+  return false;
+}
+
+async function park_unrecorded(number, url) {
+  await update_bt_unrecorded((parked) => ({ ...parked, [String(number)]: url }));
+}
+
+/** Retry every parked link, and forget the ones that land. */
+async function flush_unrecorded() {
+  const parked = await bt_unrecorded();
+  const settled = [];
+
+  for (const [number, url] of Object.entries(parked))
+    if (await record_link(number, url)) settled.push(number);
+
+  if (settled.length === 0) return;
+
+  await update_bt_unrecorded((current) => {
+    const next = { ...current };
+
+    for (const number of settled) delete next[number];
+
+    return next;
+  });
+}
+
+async function drop_from_bt_queue(numbers) {
+  const wanted = new Set(numbers.map(String));
+
+  await update_bt_queue((queue) => {
+    const next = { ...queue };
+
+    for (const number of wanted) delete next[number];
+
+    return next;
+  });
+}
+
+function bt_run_message(summary) {
+  const parts = [];
+
+  if (summary.created > 0) parts.push(`${summary.created} added to Buildertrend`);
+  if (summary.already > 0) parts.push(`${summary.already} already there`);
+  if (summary.failed > 0) parts.push(`${summary.failed} failed`);
+  if (summary.skipped > 0) parts.push(`${summary.skipped} not attempted`);
+
+  /* Named rather than folded into `failed`, because it is a different job for
+     whoever reads it: the Buildertrend work is done and only the link is
+     missing, and it retries itself on the next run. */
+  if (summary.unrecorded > 0)
+    parts.push(`${summary.unrecorded} created but not yet linked to the web app`);
+
+  if (parts.length === 0) return "Nothing was waiting for Buildertrend.";
+
+  return parts.join(" · ") + (summary.stopped && summary.reason ? `. ${summary.reason}` : ".");
+}
 
 /**
  * The message boundary.

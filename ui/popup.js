@@ -544,7 +544,7 @@ function render_bt(state) {
 
   els.bt_tally.textContent =
     queue.length === 0
-      ? "Nothing queued. Tick “also queue for Buildertrend” when you sync."
+      ? "Nothing waiting. Syncing from Appfolio creates the Buildertrend jobs too."
       : `${queue.length} waiting to be entered.`;
 
   els.bt_jobs.innerHTML = "";
