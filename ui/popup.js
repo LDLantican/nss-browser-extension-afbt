@@ -644,7 +644,24 @@ function render_bt(state) {
 
         const result = await ask("FILL_JOB", { number: work_order.number });
 
-        if (result?.ok === false && result.error) say(result.error, "error");
+        /* A refusal is not a fill, and it used to be shown as one: the error
+           appeared at the top of the panel while the button underneath said
+           "Running in its tab…", so the two halves of the popup contradicted
+           each other and the manager was left waiting for a job that was never
+           going to appear. Seen for real when the web app was unreachable —
+           `fill_job` refuses before it opens any tab, so there was no tab and
+           nothing running.
+
+           The button goes back to offering the thing it failed to do, which is
+           also what makes the refusal actionable: fix the cause, press again. */
+        if (result?.ok === false) {
+          if (result.error) say(result.error, "error");
+
+          element.disabled = false;
+          element.textContent = "Fill in Buildertrend";
+
+          return;
+        }
 
         /* No re-render here. The fill runs in its own tab and takes tens of
            seconds, and this popup will be shut long before it finishes — the
