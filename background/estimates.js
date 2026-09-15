@@ -71,7 +71,43 @@ export async function deliver_estimates_now({ manual = false } = {}) {
 
   running = true;
 
-  const summary = { delivered: 0, failed: 0, unconfirmed: 0, blocked: 0, skipped: 0, rehearsed: 0 };
+  try {
+    /* One recording point for the whole run.
+     *
+     * `remember()` used to be called at four of this function's twelve exits,
+     * so eight refusals — Buildertrend switched off, the queue unreadable,
+     * paused, scope unknown, no tab, and signed out of either system — left
+     * `bt_last_estimate_run` holding whatever the *previous* run had put there.
+     * That is worse than reporting nothing: a manager who pressed the button,
+     * got sent to a Buildertrend sign-in page and reopened the popup read the
+     * last run's unrelated problem as though it were this one's.
+     *
+     * The sign-out refusal is the case that makes this structural rather than
+     * tidy: it opens a tab, opening a tab closes the popup, so the banner it
+     * says its piece into is guaranteed to be destroyed before anybody reads
+     * it. The durable record is the only account of that run there will ever
+     * be. Hence a wrapper rather than eight more `remember()` calls — the
+     * ninth exit somebody adds is recorded whether or not they remember to. */
+    return await remember(await attempt_estimates());
+  } finally {
+    running = false;
+
+    /* Left open on a manual run so somebody can see what happened; closed on a
+       scheduled one so an unattended queue does not leave a tab behind. */
+    if (!manual) await close_tab();
+  }
+}
+
+/** The run itself. Every exit is a plain outcome; the caller records it. */
+async function attempt_estimates() {
+  /* `signed_out` is declared rather than left to spring into existence on
+     first use. It used to be absent here and incremented below, which is
+     legal JavaScript and was the whole bug: the tally existed, the run
+     still returned ok, and the popup announced "Nothing was waiting for an
+     estimate." over a queue nothing had touched. */
+  const summary = {
+    delivered: 0, failed: 0, unconfirmed: 0, blocked: 0, skipped: 0, rehearsed: 0, signed_out: 0,
+  };
   const reports = [];
 
   try {
@@ -82,8 +118,26 @@ export async function deliver_estimates_now({ manual = false } = {}) {
 
     const response = await api.deliveries(TARGET);
 
-    if (response.status === 401) return { ok: false, error: "signed_out", summary };
-    if (response.status === 403) return { ok: false, error: "not_permitted", summary };
+    /* Both of these carried a bare token and nothing else, and the popup's
+       estimate button prints `summary.reason || result.error` — so a manager
+       was shown the literal word "signed_out". Every refusal in this function
+       now says a sentence, which is the idiom the three below already use. */
+    if (response.status === 401)
+      return {
+        ok: false,
+        error: "signed_out",
+        summary: {
+          ...summary,
+          reason: "This device is no longer signed in to the web app. Open Settings and sign in again.",
+        },
+      };
+
+    if (response.status === 403)
+      return {
+        ok: false,
+        error: "not_permitted",
+        summary: { ...summary, reason: "This account is not allowed to write estimates." },
+      };
     if (!response.ok)
       return { ok: false, error: response.body?.error || "The estimate queue could not be read.", summary };
 
@@ -91,7 +145,7 @@ export async function deliver_estimates_now({ manual = false } = {}) {
       return { ok: true, summary: { ...summary, paused: true, reason: response.body.reason || "" } };
 
     const queue = Array.isArray(response.body?.deliveries) ? response.body.deliveries : [];
-    if (queue.length === 0) return await remember({ ok: true, summary, reports });
+    if (queue.length === 0) return { ok: true, summary, reports };
 
     /* Same gate the invoice drainer uses, and in the same place: before
        anything is claimed, because a claim spends an attempt. */
@@ -145,15 +199,26 @@ export async function deliver_estimates_now({ manual = false } = {}) {
       if (outcome === "signed_out") break;
     }
 
-    return await remember({ ok: true, summary, reports });
-  } catch (error) {
-    return await remember({ ok: false, error: String(error?.message || error), summary, reports });
-  } finally {
-    running = false;
+    /* The break above left the run returning `ok: true`, so a session that
+       expired half way through reported as "Nothing was waiting for an
+       estimate." while every remaining row sat untouched. The rows that were
+       written are still counted — this says the run stopped early, not that it
+       did nothing. */
+    if (summary.signed_out > 0)
+      return {
+        ok: false,
+        error: "signed_out",
+        summary: {
+          ...summary,
+          reason: "This device is no longer signed in to the web app, so the rest were left queued. "
+            + "Open Settings and sign in again.",
+        },
+        reports,
+      };
 
-    /* Left open on a manual run so somebody can see what happened; closed on a
-       scheduled one so an unattended queue does not leave a tab behind. */
-    if (!manual) await close_tab();
+    return { ok: true, summary, reports };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error), summary, reports };
   }
 }
 
@@ -413,7 +478,20 @@ async function select(tab_id, delivery, title, options) {
  * run for ever and trips the circuit breaker on work that cannot succeed.
  */
 function gate(sheet, job_id, title) {
-  if (sheet?.ok !== true)
+  /* No answer at all is not an answer about the job. `ask()` collapses a
+     timed-out message, a listener replaced by a navigation and a tab that went
+     away all to `null`, and none of them say the job is gone — so classifying
+     them below as the deleted-job case strands work the next run would have
+     written, under a message sending somebody to look for a deletion that never
+     happened. Nothing has been written at the gate, so `failed` is both honest
+     and safe: it is claimable, and the retry re-asks the question. */
+  if (sheet === null || sheet === undefined)
+    return {
+      state: "failed",
+      error: "Buildertrend's estimate screen did not answer when asked about that job.",
+    };
+
+  if (sheet.ok !== true)
     return {
       /* A job whose id Buildertrend will not open is the deleted-job case,
          which is how four of the five test links became dangling. */

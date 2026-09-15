@@ -524,15 +524,25 @@
      * emptiness off the printed total, which is a check that cannot tell an
      * empty estimate from an unpainted page. */
     const worksheet = await app.worksheet(job.buildertrend_job_id);
-    if (worksheet.ok !== true) return { ok: false, stage: "none", error: worksheet.error };
+
+    /* `blocked`, matching gate()'s reading of the same answer. Two copies of
+       one rule that disagree is exactly what the comment above is against, and
+       this pair disagreed: a job deleted between the background's read and this
+       one came back `failed`, which is claimable, so it was re-claimed and
+       re-refused until it ran out of attempts. */
+    if (worksheet.ok !== true)
+      return { ok: false, stage: "none", blocked: true, error: worksheet.error };
 
     if (Number(worksheet.job_id) !== Number(job.buildertrend_job_id))
       return { ok: false, stage: "none", error: "Buildertrend answered about a different job than the one asked for." };
 
+    /* Also `blocked`, and for the stronger reason: the link points at the wrong
+       job, which no retry can put right and a person has to repair. */
     if (wanted !== "" && worksheet.job_title !== "" && !app.same_job(worksheet.job_title, wanted))
       return {
         ok: false,
         stage: "none",
+        blocked: true,
         error: `Buildertrend calls that job "${worksheet.job_title}" and this work order expects `
           + `"${wanted}". Nothing was written.`,
       };

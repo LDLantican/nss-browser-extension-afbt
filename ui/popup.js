@@ -793,10 +793,12 @@ function render_bt(state) {
 
   els.bt_actions.innerHTML = "";
 
-  /* Asked for rather than scheduled. Selecting the job by API means the tab
-     normally stays hidden, but the picker fallback still brings one forward,
-     and an estimate is a real write into somebody else's system — a person
-     choosing the moment is worth more than a minute's latency. */
+  /* Asked for rather than scheduled. The job is selected by API and the lines
+     are posted by API, so the tab stays hidden for the whole run and nothing
+     takes anybody's focus — the picker fallback that used to bring one forward
+     is gone. It is still a button rather than an alarm because an estimate is a
+     real write into somebody else's system, and a person choosing the moment is
+     worth more than a minute's latency. */
   els.bt_actions.appendChild(
     button("Write Buildertrend estimates", "btn btn--quiet", async (event) => {
       const element = event.currentTarget;
