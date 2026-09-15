@@ -431,20 +431,21 @@
       const outcome = await this.waitForSaveOutcome(staleOutcomes);
 
       if (outcome.result === "success") {
-        // The job already exists in Buildertrend at this point, so a messaging
-        // hiccup here must not be reported as a failed save.
-        try {
-          await browser.runtime.sendMessage({
-            type: "UNQUEUE_FROM_BT",
-            payload: { numbers: [workOrderNumber] },
-          });
-        } catch {
-          this.sendFlashMessage(
-            "error",
-            `${workOrderNumber} was added but could not be removed from the queue.`,
-          );
-        }
-
+        // Deliberately does **not** dequeue.
+        //
+        // This used to send a fire-and-forget UNQUEUE_FROM_BT here, from v1,
+        // when the page was the only thing that knew a save had happened. The
+        // background watches the tab for that now and clears the row itself
+        // once it has also recorded the job's URL — and the two coexisting was
+        // a real bug, not redundancy: the page dequeued on save, so a job whose
+        // URL could not be recorded afterwards was dropped from the queue
+        // anyway. The work order then sat in Buildertrend with no link, which
+        // is the one outcome the queue exists to prevent, and the parking and
+        // retrying added for exactly that case never got the chance to run.
+        //
+        // A save this page can see is still only a save. Whether the row is
+        // finished is a question about the web app too, and this page does not
+        // talk to the web app.
         this.sendFlashMessage("alert", `${workOrderNumber} successfully added.`);
         return true;
       }

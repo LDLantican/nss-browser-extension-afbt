@@ -18,7 +18,8 @@ const KEYS = {
   settings: "settings",
   sync: "sync_jobs",
   bt_queue: "bt_queue",
-  bt_unrecorded: "bt_unrecorded",
+  bt_pending_links: "bt_pending_links",
+  bt_last_run: "bt_last_run",
 };
 
 const DEFAULT_SETTINGS = {
@@ -130,26 +131,51 @@ export function update_bt_queue(mutator) {
 }
 
 /**
- * Jobs that exist in Buildertrend but whose URL the web app has not accepted:
- * work-order number => url.
+ * Jobs that exist in Buildertrend but are not linked on the web app yet:
+ * work-order number => `{ url, title, reason, at }`.
  *
- * This is the one state the two-destination rule cannot express. A job created
- * in Buildertrend and recorded nowhere is *worse* than one never created: the
- * server still reads `buildertrend_url IS NULL`, so the next sync would create
- * a **second real job**, and two jobs sharing a title make the id unfindable
- * for both — the picker refuses an ambiguous match, by design.
+ * This is the one state the two-destination rule cannot express, and there are
+ * two shapes of it:
  *
- * So a link that could not be recorded is neither dropped (losing it) nor left
- * in `bt_queue` (which would re-create it). It waits here, is retried at the
- * top of every run, and needs no browser to settle — it is one POST to our own
- * server, not a form to fill again.
+ * - **`url` set** — we know where the job is and the server would not take it
+ *   (a lapsed token, a 500, no network). Settling it is one POST.
+ * - **`url` null** — the job was saved but its id could not be read. Settling
+ *   it means searching Buildertrend for `title` first, then posting.
+ *
+ * Both belong in one place because they are the same fact to whoever is
+ * looking: *Buildertrend has this job and the web app does not know where.*
+ *
+ * A job in either state must **not** stay in `bt_queue`. Leaving it there is
+ * how a re-run makes a second real job, and two jobs sharing a title make the
+ * id unfindable for both — the picker refuses an ambiguous match, by design.
+ * So the queue is emptied on creation and the shortfall is recorded here,
+ * retried at the top of every run and on demand from the popup.
  */
-export function bt_unrecorded() {
-  return read(KEYS.bt_unrecorded, {});
+export function bt_pending_links() {
+  return read(KEYS.bt_pending_links, {});
 }
 
-export function update_bt_unrecorded(mutator) {
-  return update(KEYS.bt_unrecorded, {}, mutator);
+export function update_bt_pending_links(mutator) {
+  return update(KEYS.bt_pending_links, {}, mutator);
+}
+
+/**
+ * What the last Buildertrend run did: `{ started_at, finished_at, summary,
+ * jobs: [...] }`.
+ *
+ * One run, not a log. `notify.js` reuses a single notification id, so the only
+ * report this leg had was a toast that the next toast overwrote — which is why
+ * three separate failures were diagnosed by inference from the server's access
+ * log instead of by reading what the extension already knew. This is the
+ * durable counterpart, and the popup renders it as plain text so it survives a
+ * screenshot or a paste into a chat.
+ */
+export function bt_last_run() {
+  return read(KEYS.bt_last_run, null);
+}
+
+export function save_bt_last_run(value) {
+  return update(KEYS.bt_last_run, null, () => value);
 }
 
 /**
@@ -175,6 +201,42 @@ export async function migrate_v1_queue() {
   });
 
   return moved;
+}
+
+/**
+ * Move `bt_unrecorded` into `bt_pending_links`, once.
+ *
+ * The old key held `number => url`; the new one holds an object, because a
+ * pending link now also covers "the job exists and we do not know its id".
+ *
+ * That key almost certainly never held anything — the POST it recorded
+ * failures from was never once reached — so this is insurance rather than a
+ * migration. It is written anyway because the thing it would lose is a link to
+ * a real job, which is the failure this whole area exists to prevent, and
+ * being sure costs eight lines.
+ */
+export async function migrate_bt_unrecorded() {
+  const stored = await raw_get(["bt_unrecorded"]);
+  const old = stored.bt_unrecorded;
+
+  if (!old || typeof old !== "object") return 0;
+
+  const moved = Object.entries(old).map(([number, url]) => [
+    number,
+    { url: typeof url === "string" ? url : null, title: "", reason: "Carried over from an earlier version.", at: Date.now() },
+  ]);
+
+  if (moved.length > 0)
+    await update(KEYS.bt_pending_links, {}, (current) => ({
+      ...Object.fromEntries(moved),
+      ...current,
+    }));
+
+  await new Promise((resolve) => {
+    chrome.storage.local.remove("bt_unrecorded", () => resolve());
+  });
+
+  return moved.length;
 }
 
 export { KEYS, DEFAULT_SETTINGS };

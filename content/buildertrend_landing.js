@@ -42,6 +42,15 @@
  * the new-job form: trusting whichever row comes back first is worse than
  * requiring a match.
  *
+ * ## It needs the tab to be visible, and that is not a detail
+ *
+ * The picker is virtualised over ~900 jobs, and Chrome does not paint a hidden
+ * tab — so in a background tab the rows are not offscreen, they are **absent
+ * from the DOM**. Measured: the identical query returns one row while the tab
+ * is foregrounded and zero while it is not. Nothing here can work around that,
+ * so the background brings the tab forward before each attempt; see
+ * `read_saved_job()` in background/buildertrend.js.
+ *
  * ## The search box is left as it was found
  *
  * This runs in the manager's own tab, on a page they are looking at. A filter
@@ -50,6 +59,22 @@
  */
 
 (() => {
+  /**
+   * Stamped on every reply, because "no answer" and "the wrong script answered"
+   * look identical to the caller and are not the same problem.
+   *
+   * Buildertrend's move from the new-job page to Landing is a same-document
+   * navigation, so Chrome neither injects this script nor tears down the
+   * add-job one — which stays alive and *does* receive LANDING_FIND_JOB. Its
+   * listener does not recognise the type, falls off the end without calling
+   * sendResponse, and Chrome closes the port: `sendMessage` then resolves with
+   * `undefined` rather than throwing. The caller's recovery keyed off a throw,
+   * so it never fired, and twelve attempts reported nothing at all.
+   *
+   * A marker makes the distinction checkable instead of inferable.
+   */
+  const LANDING_REPLY = "buildertrend_landing";
+
   const SEARCH = "input[data-testid='JobSearch']";
   const ROW = "[data-testid^='JobListItem-']";
 
@@ -109,17 +134,46 @@
       .filter((row) => /^[1-9]\d*$/.test(row.id));
   }
 
+  /**
+   * What the page actually had, for a failure to carry back with it.
+   *
+   * A refusal that says only "it was not there" is what made this leg
+   * undebuggable: the caller could not tell an empty list from a list whose
+   * rows read differently from the title being matched. Since the match is an
+   * exact comparison against the row's whole collapsed text, the rows
+   * themselves are the evidence, so a few of them travel with the error.
+   *
+   * Capped at five and truncated, because this is read in a popup and pasted
+   * into a chat, not scrolled.
+   */
+  function seen(query, wanted) {
+    const present = rows();
+
+    return {
+      searched: query,
+      wanted,
+      row_count: present.length,
+      sample: present.slice(0, 5).map((row) => ({ id: row.id, title: row.title.slice(0, 80) })),
+    };
+  }
+
   async function find_job(title, query) {
     const wanted = clean(title);
 
-    if (wanted === "") return { ok: false, error: "No job title was given to look for." };
+    if (wanted === "")
+      return { from: LANDING_REPLY, ok: false, error: "No job title was given to look for.", detail: { wanted, searched: query } };
 
     /* Landing paints its picker after the redirect settles, so the box is
        waited for rather than assumed. */
     const search = await wait_for(() => document.querySelector(SEARCH), LOOKUP_BUDGET_MS);
 
     if (search === null)
-      return { ok: false, error: "Buildertrend's job list did not load, so nothing was recorded." };
+      return {
+        from: LANDING_REPLY,
+        ok: false,
+        error: "Buildertrend's job list did not load, so nothing was recorded.",
+        detail: { ...seen(query, wanted), search_box: false },
+      };
 
     type_into(search, query);
 
@@ -129,27 +183,35 @@
       return found.length > 0 ? found : null;
     }, LOOKUP_BUDGET_MS);
 
+    /* Read before the box is cleared: clearing re-renders the list, and the
+       rows worth reporting are the ones the match was actually run against. */
+    const evidence = { ...seen(query, wanted), search_box: true };
+
     type_into(search, "");
 
     if (matches === null)
       return {
+        from: LANDING_REPLY,
         ok: false,
         error: `Buildertrend's job list did not show "${wanted}", so nothing was recorded.`,
+        detail: evidence,
       };
 
     const ids = new Set(matches.map((match) => match.id));
 
     if (ids.size > 1)
       return {
+        from: LANDING_REPLY,
         ok: false,
         error:
           `Buildertrend has more than one job called "${wanted}", so none of them was recorded. `
           + "Check which one is the new job before running it again.",
+        detail: evidence,
       };
 
     const id = [...ids][0];
 
-    return { ok: true, id, url: `${location.origin}/app/JobPage/${id}/1` };
+    return { from: LANDING_REPLY, ok: true, id, url: `${location.origin}/app/JobPage/${id}/1` };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -164,7 +226,8 @@
 
     find_job(title, query)
       .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      .catch((error) =>
+        sendResponse({ from: LANDING_REPLY, ok: false, error: String(error?.message || error) }));
 
     return true;
   });

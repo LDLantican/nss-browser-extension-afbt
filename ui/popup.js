@@ -29,6 +29,8 @@ const els = {
   bt_tally: document.getElementById("bt-tally"),
   bt_jobs: document.getElementById("bt-jobs"),
   bt_actions: document.getElementById("bt-actions"),
+  bt_pending: document.getElementById("bt-pending"),
+  bt_probe: document.getElementById("bt-probe"),
   delivery_tally: document.getElementById("delivery-tally"),
   delivery_actions: document.getElementById("delivery-actions"),
   delivery_probe: document.getElementById("delivery-probe"),
@@ -531,6 +533,79 @@ function job_row(job, state) {
   return item;
 }
 
+/**
+ * What the last Buildertrend run did, as something a person can read or paste.
+ *
+ * Same plain-text shape as describe_probe(), and for the same reason — it
+ * exists to be sent to whoever can compare it against what the scripts look
+ * for, and a flat list survives a screenshot or a chat message intact.
+ *
+ * It leads with the step that failed and the page's own words for it. Three
+ * separate faults in this leg were diagnosed by inference from the web
+ * server's access log because the extension knew exactly what went wrong and
+ * told nobody; every line here is something it already computed.
+ */
+function describe_bt_run(run) {
+  if (!run) return "";
+
+  const lines = [];
+  const when = new Date(run.finished_at || run.started_at || Date.now());
+  const seconds = Math.round(((run.finished_at || 0) - (run.started_at || 0)) / 1000);
+
+  lines.push(`run     : ${when.toLocaleString()}  (${seconds}s)`);
+
+  const summary = run.summary || {};
+
+  lines.push(
+    `result  : ${summary.created || 0} linked · ${summary.unidentified || 0} unidentified · `
+    + `${summary.failed || 0} failed · ${summary.skipped || 0} not attempted`,
+  );
+
+  if (summary.stopped && summary.reason) lines.push(`stopped : ${summary.reason}`);
+
+  for (const job of run.jobs || []) {
+    lines.push("");
+    lines.push(`${job.number}`);
+    lines.push(`  created : ${job.created ? "yes" : "NO"}`);
+
+    if (job.url) lines.push(`  url     : ${job.url}`);
+    if (job.error) lines.push(`  problem : ${job.error}`);
+
+    const detail = job.detail || {};
+
+    /* The two that separate "the page never ran" from "the page ran and said
+       no" — which need opposite fixes and used to read identically. */
+    if (detail.stage) {
+      lines.push(
+        `  lookup  : stage=${detail.stage} answered=${detail.answered ? "yes" : "NO"}`
+        + ` attempts=${detail.attempts ?? "?"} reloaded=${detail.reloaded ? "yes" : "no"}`,
+      );
+    }
+
+    if (detail.searched !== undefined) lines.push(`  searched: "${detail.searched}"`);
+    if (detail.wanted !== undefined) lines.push(`  wanted  : "${detail.wanted}"`);
+
+    if (detail.row_count !== undefined) {
+      lines.push(`  rows    : ${detail.row_count}`);
+
+      /* The evidence for the commonest failure: the title is matched exactly,
+         so seeing what the rows actually said settles it at a glance. */
+      for (const row of detail.sample || []) lines.push(`    ${row.id}  "${row.title}"`);
+    }
+
+    if (job.link) {
+      lines.push(
+        `  link    : ${job.link.ok ? "recorded" : "REFUSED"} `
+        + `status=${job.link.status || 0}${job.link.error ? ` — ${job.link.error}` : ""}`,
+      );
+    } else if (job.created && !job.url) {
+      lines.push(`  link    : not attempted — no id to record`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 function render_bt(state) {
   if (state.settings?.buildertrend_enabled === false) {
     els.bt_panel.hidden = true;
@@ -596,6 +671,67 @@ function render_bt(state) {
 
     els.bt_jobs.appendChild(item);
   }
+
+  /* Jobs Buildertrend already holds that the web app cannot point at.
+   *
+   * Listed separately from the queue because they are the opposite situation:
+   * the queue is work not done, this is work done and unrecorded. Putting them
+   * in one list would invite pressing Fill on a job that already exists, which
+   * is how a duplicate gets made. */
+  const pending = Object.entries(state.bt_pending_links || {});
+
+  els.bt_pending.innerHTML = "";
+
+  for (const [number, entry] of pending) {
+    const item = document.createElement("li");
+    item.className = "job";
+
+    const head = document.createElement("div");
+    head.className = "job__head";
+
+    const label = document.createElement("span");
+    label.className = "job__number";
+    label.textContent = number;
+    head.appendChild(label);
+
+    head.appendChild(
+      button("Link now", "btn btn--quiet job__go", async (event) => {
+        const element = event.currentTarget;
+        element.disabled = true;
+        element.textContent = entry?.url ? "Recording…" : "Looking…";
+
+        const result = await ask("LINK_NOW", { number });
+
+        if (result?.ok === false && result.error) say(result.error, "error");
+        else say(`${number} is linked to Buildertrend.`, "ok");
+
+        render();
+      }),
+    );
+
+    item.appendChild(head);
+
+    const why = document.createElement("p");
+    why.className = "job__where";
+    why.textContent = entry?.url
+      ? "In Buildertrend. The web app has not accepted the link yet."
+      : "In Buildertrend. Its job could not be identified, so the link is unknown.";
+    item.appendChild(why);
+
+    els.bt_pending.appendChild(item);
+  }
+
+  if (pending.length > 0)
+    els.bt_tally.textContent += ` ${pending.length} waiting to be linked to the web app.`;
+
+  /* Only shown when it has something to say about a failure. On a clean run it
+     would be noise, and the panel is read most when something went wrong. */
+  const run = state.bt_last_run;
+  const worth_showing =
+    run && ((run.summary?.unidentified || 0) > 0 || (run.summary?.failed || 0) > 0 || pending.length > 0);
+
+  els.bt_probe.hidden = !worth_showing;
+  els.bt_probe.textContent = worth_showing ? describe_bt_run(run) : "";
 
   els.bt_actions.innerHTML = "";
 

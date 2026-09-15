@@ -83,6 +83,24 @@ If Buildertrend fails, the web app still has the work order and knows it has no
 Buildertrend job. Nothing is silently out of step; finishing the missing half is
 a re-run rather than an investigation.
 
+**A row leaves the queue when its job is created, not when its link is
+recorded.** Waiting for the link reads as the careful choice and is the
+dangerous one: a job whose id could not be read stayed queued, so the next sync
+created a *second* job with the same title — and two jobs sharing a title cannot
+be told apart afterwards, so neither can ever be linked. Creation empties the
+row instead, and anything still unlinked is listed in the popup with a **Link
+now** button. That button searches Buildertrend and records what it finds; it
+never opens the add-job page, so pressing it twice cannot create anything.
+
+A job created but not identified no longer stops the rest of the batch either.
+Stopping is right for a systemic failure — signed out, web app unreachable —
+because the remaining rows would fail the same way. An unreadable id is not
+that: the job is fine, and the link is one click to repair.
+
+The popup also shows what the last Buildertrend run did, per job, as plain text
+meant to be screenshotted or pasted. It exists because this leg once failed six
+runs in a row while reporting nothing at all.
+
 **On the AppFolio work-order list**, rows are chosen with **AppFolio's own row
 checkboxes** — the ones that drive their header select-all and their "N
 Selected" counter. The extension adds no box of its own; it reads theirs. It

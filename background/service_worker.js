@@ -26,12 +26,15 @@ import {
   clear_auth,
   bt_queue,
   update_bt_queue,
-  bt_unrecorded,
-  update_bt_unrecorded,
+  bt_pending_links,
+  update_bt_pending_links,
+  bt_last_run,
+  save_bt_last_run,
+  migrate_bt_unrecorded,
 } from "./store.js";
 import { notify, set_badge } from "./notify.js";
 import { api, normalize_base, origin_pattern } from "./api.js";
-import { fill_job, run_queue } from "./buildertrend.js";
+import { fill_job, run_queue, find_existing_job } from "./buildertrend.js";
 import {
   deliver_now,
   is_delivery_alarm,
@@ -60,12 +63,14 @@ const handlers = {
   /* ---- state the UI renders from ---------------------------------------- */
 
   async STATE() {
-    const [config, session, counts, jobs, queue] = await Promise.all([
+    const [config, session, counts, jobs, queue, pending, last_run] = await Promise.all([
       settings(),
       auth.state(),
       sync.summary(),
       sync.sync_jobs_snapshot(),
       bt_queue(),
+      bt_pending_links(),
+      bt_last_run(),
     ]);
 
     return {
@@ -74,6 +79,11 @@ const handlers = {
       counts,
       jobs,
       bt_queue: queue,
+      /* Both new, and both for the same reason: what the Buildertrend leg did
+         was knowable only to itself. A pending link is work somebody has to
+         finish, and the last run is the only account of why. */
+      bt_pending_links: pending,
+      bt_last_run: last_run,
       suggested_device_name: auth.suggested_device_name(),
     };
   },
@@ -299,6 +309,17 @@ const handlers = {
     return { queued: list.length };
   },
 
+  /**
+   * Take a row out of the Buildertrend queue by hand.
+   *
+   * The popup's Remove button, and nothing else. The new-job page used to send
+   * this too, the moment it saw its own save — which quietly defeated the
+   * queue: a job whose URL could not be recorded afterwards was dropped anyway,
+   * leaving the work order in Buildertrend with no link and nothing left to
+   * retry. The run clears its own rows now, after the link is recorded.
+   *
+   * A person asking for a row to go is a different thing, and still allowed.
+   */
   async UNQUEUE_FROM_BT({ numbers }) {
     const wanted = new Set((Array.isArray(numbers) ? numbers : [numbers]).map(String));
 
@@ -311,6 +332,49 @@ const handlers = {
     });
 
     return { ok: true };
+  },
+
+  /**
+   * Settle one pending link, on demand, without touching Buildertrend's form.
+   *
+   * Two shapes to settle, and the difference is only whether the id is known:
+   * a row that has a URL is one POST, and a row without one has to be found in
+   * Buildertrend first. Finding it reuses the job picker search the run itself
+   * uses — but from a tab opened for this and brought to the front, with no
+   * fill racing it and no batch waiting behind it, which is the difference
+   * between a lookup that has one chance and one that can simply be tried
+   * again.
+   *
+   * It never opens the add-job page, so it cannot create anything. That is
+   * what makes it safe to offer as a button.
+   */
+  async LINK_NOW({ number }) {
+    const wanted = String(number || "").trim();
+
+    if (wanted === "") return { ok: false, error: "No work order was named." };
+
+    const parked = await bt_pending_links();
+    const entry = parked[wanted];
+
+    if (!entry) return { ok: false, error: `${wanted} is not waiting to be linked.` };
+
+    let url = entry.url || null;
+
+    if (!url) {
+      const found = await find_existing_job(wanted, entry.title || "");
+
+      if (!found.ok) return found;
+
+      url = found.url;
+    }
+
+    const answer = await record_link(wanted, url);
+
+    if (!answer.ok) return { ok: false, error: answer.error };
+
+    await forget_pending_links([wanted]);
+
+    return { ok: true, url };
   },
 
   async CLEAR_BT_QUEUE() {
@@ -411,7 +475,7 @@ const handlers = {
     /* Anything left over from a previous run goes first: it is a single POST to
        our own server and, until it lands, the work order looks to everything
        else like a job that was never created. */
-    await flush_unrecorded();
+    await flush_pending_links();
 
     const outstanding = rows.filter((row) => !already.has(String(row.number)));
 
@@ -420,24 +484,60 @@ const handlers = {
     if (outstanding.length === 0)
       return { ok: true, summary: { created: 0, failed: 0, skipped: 0, already: already.size } };
 
-    const summary = await run_queue(outstanding, config, async (outcome) => {
-      if (!outcome.ok) return;
+    const started_at = Date.now();
+    const jobs = [];
 
-      /* The job exists in Buildertrend from here on, so this row must leave the
-         queue whatever happens next: leaving it would create a second real job
-         on the next run, and two jobs sharing a title make the id unfindable
-         for both. What must not happen is losing the link, so a URL that the
-         server will not take is parked rather than dropped. */
+    const summary = await run_queue(outstanding, config, async (outcome) => {
+      const entry = {
+        number: outcome.number,
+        created: outcome.created === true,
+        ok: outcome.ok === true,
+        url: outcome.url || null,
+        error: outcome.error || "",
+        detail: outcome.detail || null,
+        link: null,
+      };
+
+      /* Nothing was created, so the row stays queued and there is nothing to
+         link. This is the only path that leaves `bt_queue` untouched, and it
+         has to be, because it is the only one where Buildertrend holds
+         nothing. */
+      if (!entry.created) {
+        jobs.push(entry);
+
+        return;
+      }
+
+      /* From here Buildertrend holds a job, so the row leaves the queue
+         whatever else happens: leaving it is what makes a second real job on
+         the next run, and two jobs sharing a title make the id unfindable for
+         both. The shortfall is parked instead — never dropped. */
       await drop_from_bt_queue([outcome.number]);
 
-      if (!outcome.url) return;
+      if (!outcome.url) {
+        await park_pending_link(outcome.number, null, outcome.title || "", outcome.error || "");
+        jobs.push(entry);
 
-      if (!(await record_link(outcome.number, outcome.url)))
-        await park_unrecorded(outcome.number, outcome.url);
+        return;
+      }
+
+      entry.link = await record_link(outcome.number, outcome.url);
+
+      if (!entry.link.ok)
+        await park_pending_link(outcome.number, outcome.url, outcome.title || "", entry.link.error);
+
+      jobs.push(entry);
     });
 
     summary.already = already.size;
-    summary.unrecorded = Object.keys(await bt_unrecorded()).length;
+    summary.pending = Object.keys(await bt_pending_links()).length;
+
+    await save_bt_last_run({
+      started_at,
+      finished_at: Date.now(),
+      summary,
+      jobs,
+    });
 
     /* One notification for the run, not one per job: notify.js reuses a single
        id, so per-job messages would overwrite each other and only the last
@@ -460,46 +560,95 @@ const handlers = {
  * URL, which is the answer that prevents a second job rather than an error.
  */
 async function record_link(number, url) {
+  let last = { ok: false, status: 0, error: "The web app was never reached." };
+
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
 
     try {
       const answer = await api.remember_buildertrend(number, url);
 
-      if (answer?.ok === true) return true;
+      if (answer?.ok === true) return { ok: true, status: answer.status, error: "" };
+
+      /* Kept rather than reduced to false. A lapsed token, a refused payload
+         and a dead server all ended as the same silent parking, so the one
+         question worth asking — *why* would the web app not take it* — had no
+         answer anywhere. */
+      last = {
+        ok: false,
+        status: answer?.status || 0,
+        error: answer?.body?.error || `The web app answered ${answer?.status || "nothing"}.`,
+      };
 
       /* A refusal is settled, not slow. Retrying a 422 just delays the parking
          and a 404 means the work order is not there to record against. */
-      if (answer?.status === 422 || answer?.status === 404) return false;
-    } catch {
+      if (answer?.status === 422 || answer?.status === 404) return last;
+    } catch (error) {
       /* Network. Worth another go. */
+      last = { ok: false, status: 0, error: error?.message || "Could not reach the web app." };
     }
   }
 
-  return false;
+  return last;
 }
 
-async function park_unrecorded(number, url) {
-  await update_bt_unrecorded((parked) => ({ ...parked, [String(number)]: url }));
+/**
+ * Remember that Buildertrend holds a job the web app cannot point at.
+ *
+ * `url` may be null, and that is the point: a job whose id could not be read is
+ * just as unlinked as one the server refused, and whoever is looking needs to
+ * see both. What must never happen is the row staying in `bt_queue`, because
+ * that is what makes a second real job on the next run.
+ */
+async function park_pending_link(number, url, title, reason) {
+  await update_bt_pending_links((parked) => ({
+    ...parked,
+    [String(number)]: { url: url || null, title: title || "", reason: reason || "", at: Date.now() },
+  }));
 }
 
-/** Retry every parked link, and forget the ones that land. */
-async function flush_unrecorded() {
-  const parked = await bt_unrecorded();
-  const settled = [];
+async function forget_pending_links(numbers) {
+  const wanted = new Set(numbers.map(String));
 
-  for (const [number, url] of Object.entries(parked))
-    if (await record_link(number, url)) settled.push(number);
-
-  if (settled.length === 0) return;
-
-  await update_bt_unrecorded((current) => {
+  await update_bt_pending_links((current) => {
     const next = { ...current };
 
-    for (const number of settled) delete next[number];
+    for (const number of wanted) delete next[number];
 
     return next;
   });
+}
+
+/**
+ * Settle every pending link that can be settled without a browser.
+ *
+ * Only the ones whose URL is already known: those are one POST each. A row
+ * with no URL needs Buildertrend open and searched, which is what LINK_NOW is
+ * for — doing it here would open tabs behind a manager who only pressed Sync.
+ */
+async function flush_pending_links() {
+  const parked = await bt_pending_links();
+  const settled = [];
+
+  for (const [number, entry] of Object.entries(parked)) {
+    const url = entry?.url;
+    if (!url) continue;
+
+    const answer = await record_link(number, url);
+
+    /* A 404 is settled too, in the other direction: the work order it would be
+       recorded against is gone, so there is nothing this can ever accomplish.
+       Keeping it would leave a row in the popup that no amount of pressing
+       could clear — a permanent piece of confusing furniture. Dropping a link
+       is normally the thing this whole area exists to prevent, which is why it
+       is done only for the one answer that means the other end no longer
+       exists. */
+    if (answer.ok || answer.status === 404) settled.push(number);
+  }
+
+  if (settled.length > 0) await forget_pending_links(settled);
+
+  return settled.length;
 }
 
 async function drop_from_bt_queue(numbers) {
@@ -524,9 +673,9 @@ function bt_run_message(summary) {
 
   /* Named rather than folded into `failed`, because it is a different job for
      whoever reads it: the Buildertrend work is done and only the link is
-     missing, and it retries itself on the next run. */
-  if (summary.unrecorded > 0)
-    parts.push(`${summary.unrecorded} created but not yet linked to the web app`);
+     missing, and it is repairable from the popup without re-running anything. */
+  if (summary.pending > 0)
+    parts.push(`${summary.pending} waiting to be linked to the web app`);
 
   if (parts.length === 0) return "Nothing was waiting for Buildertrend.";
 
@@ -586,6 +735,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
  */
 async function wake() {
   await migrate_v1_queue();
+  await migrate_bt_unrecorded();
   await refresh_badge();
 
   /* Created rather than checked for: chrome.alarms.create replaces an alarm of
