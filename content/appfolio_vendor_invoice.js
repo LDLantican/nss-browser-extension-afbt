@@ -156,6 +156,14 @@
       note_save: "button.js-notes-form-save",
       notes_list: "div.js-notes-list",
 
+      /* What the page renders once it has actually taken the photographs.
+         The previews are siblings *above* #react-dropzone, not children of it —
+         the dropzone keeps saying "Drag Images Here" no matter how many are
+         selected — so anything scoped inside it matches nothing. Confirmed
+         against the live page on 16 September 2026 by selecting two images and
+         reading the result back. See attached_count(). */
+      note_thumb: "img[alt='selected']",
+
       /* the invoices page */
       invoices_container: ".js-invoices",
       /* The limit, where it actually gates a submit. maintenance_limit_cents()
@@ -219,6 +227,17 @@
      * seconds covers the 109-row Completed render in the saved captures.
      */
     TAB_WAIT_MS: 10000,
+
+    /**
+     * How long the dropzone may take to admit it has the photographs.
+     *
+     * Its own budget for the opposite reason TAB_WAIT_MS has one: this is paid
+     * on the *hit* path, once per note, and react-dropzone's onDrop is a
+     * microtask plus a render — it is either there in well under a second or it
+     * is not coming. Waiting WAIT_MS on every note to learn that would put
+     * fifteen seconds on each job for nothing.
+     */
+    ATTACH_WAIT_MS: 5000,
 
     async init() {
       /* Remembered whenever a person is on a vendor work order, because that is
@@ -528,9 +547,16 @@
     /**
      * One note, with up to ten photographs.
      *
-     * The dropzone is react-dropzone, so the reliable path is its own hidden
-     * input plus a change event; a synthetic drop is the fallback for a build
-     * that stops rendering the input.
+     * The dropzone is react-dropzone; attach() puts the files on its hidden
+     * input and waits for the page to say it has them.
+     *
+     * **Save is not pressed until the photographs are visibly on the form.**
+     * That ordering is the whole point of this function: a note saved without
+     * its photographs cannot be repaired afterwards, because a retry posts a
+     * *second* note rather than filling in the first. So a failure to attach is
+     * a failure of the note, taken before anything is written — which is cheap,
+     * because notes are posted before the invoice and nothing has been billed
+     * yet.
      */
     async post_note(payload) {
       const field = document.querySelector(app.SELECTORS.note_field);
@@ -552,31 +578,53 @@
         if (file !== null) files.push(file);
       }
 
-      if (files.length > 0) {
-        const attached = app.attach(files);
+      /* Every photograph failed to fetch. Saving now would post exactly the
+         text-only note this path exists to prevent, so it is a failure — and a
+         safely retryable one, because notes go before the invoice and nothing
+         has been written to AppFolio yet. */
+      if (photos.length > 0 && files.length === 0)
+        return {
+          ok: false,
+          error: `None of the ${photos.length} photographs for this note could be fetched.`,
+        };
 
-        if (!attached) return { ok: false, error: "Could not attach photos to the note." };
+      let attached = 0;
+
+      if (files.length > 0) {
+        attached = await app.attach(files);
+
+        /* One retry on the same page. The likeliest cause of a first miss is
+           the dropzone not having been mounted when the event went out, and
+           that cures itself in the time the first attempt spent waiting. */
+        if (attached < files.length) attached = await app.attach(files);
+
+        /* Deliberately before the click: a note saved without its photographs
+           cannot be repaired by a retry, because the retry posts a second note
+           rather than filling in the first. */
+        if (attached < files.length)
+          return {
+            ok: false,
+            error: `Only ${attached} of ${files.length} photographs would attach to the note, so it was not saved.`,
+          };
       }
 
       const save = document.querySelector(app.SELECTORS.note_save);
 
       if (save === null) return { ok: false, error: "Could not find the Save Note button." };
 
+      /* Counted before the click, because the test this replaces — whether the
+         list still reads "No Notes" — is already false on any job that has a
+         note, which is every second batch and every retry. It returned true on
+         the first poll and confirmed nothing. */
+      const before = app.note_count();
+
       save.click();
 
-      /* The empty-state text disappearing is the save landing. Waiting on the
-         textarea clearing would also work and is less specific. */
-      const saved = await app.wait_for(() => {
-        const list = document.querySelector(app.SELECTORS.notes_list);
-
-        if (list === null) return null;
-
-        return /no notes/i.test(list.textContent || "") ? null : true;
-      });
+      const saved = await app.wait_for(() => (app.note_count() > before ? true : null));
 
       return saved === null
         ? { ok: false, error: "Save Note was pressed but the note did not appear." }
-        : { ok: true, photos_attached: files.length, photos_offered: photos.length };
+        : { ok: true, photos_attached: attached, photos_offered: photos.length };
     },
 
     /**
@@ -1559,7 +1607,43 @@
     },
 
     /**
-     * Put photographs on the note.
+     * How many photographs the page is showing as taken.
+     *
+     * This is the question `input.files.length` cannot answer. Assigning a
+     * FileList sets a property on a DOM node; it says nothing about whether
+     * React ever read it. On 16 September 2026 the assignment stuck, the note
+     * saved, and not one image was attached — so the readback survives below
+     * only as a cheap early failure, and the wait is on this.
+     *
+     * The page's own counter is preferred over counting thumbnails, because it
+     * is the page's arithmetic rather than ours and it survives however the
+     * previews come to be rendered; the thumbnails are the fallback for a build
+     * that drops the counter. Both are matched against the whole document on
+     * purpose: the previews are siblings *above* #react-dropzone rather than
+     * children of it, so there is no one container that reliably holds both,
+     * and neither pattern is remotely ambiguous on this page.
+     */
+    attached_count() {
+      const counted = /(\d+)\s*\/\s*\d+\s+images?\s+selected/i.exec(document.body.textContent || "");
+
+      if (counted !== null) return Number(counted[1]);
+
+      return document.querySelectorAll(app.SELECTORS.note_thumb).length;
+    },
+
+    /**
+     * How many notes the list is showing. The empty state is not a note.
+     */
+    note_count() {
+      const list = document.querySelector(app.SELECTORS.notes_list);
+
+      if (list === null) return 0;
+
+      return /no notes/i.test(list.textContent || "") ? 0 : list.children.length;
+    },
+
+    /**
+     * Put photographs on the note, and prove the page took them.
      *
      * react-dropzone renders its own hidden `input[type=file]`, and setting
      * that plus a `change` event is the documented way in. The synthetic `drop`
@@ -1568,30 +1652,53 @@
      *
      * A file input's `files` cannot take an array; DataTransfer is the only way
      * to build a FileList.
+     *
+     * **Dispatching is not landing.** This used to return true the instant the
+     * event went out, and post_note() clicked Save on the very next statement —
+     * the same tick, before react-dropzone's onDrop (which awaits
+     * getFilesFromEvent) had run at all. Four invoices went to Camelot on
+     * 16 September 2026 with text-only notes, every one reported a success. So
+     * what comes back now is the count the *page* admits to, read after a wait.
+     *
+     * @returns {Promise<number>} photographs the page is showing as attached.
      */
-    attach(files) {
+    async attach(files) {
       const transfer = new DataTransfer();
 
       for (const file of files) transfer.items.add(file);
 
+      /* Re-queried here rather than carried in from earlier: this is a React
+         page and the input may have been re-rendered in between. */
       const input = document.querySelector(app.SELECTORS.note_file_input);
 
       if (input !== null) {
         input.files = transfer.files;
-        input.dispatchEvent(new Event("change", { bubbles: true }));
 
-        return true;
+        /* A FileList that did not even stick to the node is worth reporting now
+           rather than after waiting out the whole budget to hear it. */
+        if (input.files.length !== files.length) return 0;
+
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        const zone = document.querySelector(app.SELECTORS.note_dropzone);
+
+        if (zone === null) return 0;
+
+        zone.dispatchEvent(
+          new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }),
+        );
       }
 
-      const zone = document.querySelector(app.SELECTORS.note_dropzone);
+      const seen = await app.wait_for(() => {
+        const count = app.attached_count();
 
-      if (zone === null) return false;
+        return count >= files.length ? count : null;
+      }, app.ATTACH_WAIT_MS);
 
-      const drop = new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer });
-
-      zone.dispatchEvent(drop);
-
-      return true;
+      /* On a timeout, report what is actually there rather than zero: a partial
+         attach and a total refusal are different failures and the caller says
+         which. */
+      return seen === null ? app.attached_count() : seen;
     },
 
     /**

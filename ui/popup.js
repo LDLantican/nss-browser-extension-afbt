@@ -360,6 +360,13 @@ async function render_delivery() {
            here because this is the only place it can be: a delivered row's
            last_error is nulled, so the server has nowhere to keep it. */
         summary.left_open ? `${summary.left_open} still In Progress` : "",
+
+        /* A note keeps whatever photographs it could take, so these jobs are
+           billed and their notes are posted — just short. Worth saying out
+           loud: a note is the client's proof of work, and the one that goes out
+           with fewer photographs than the job has looks exactly like one that
+           went out complete. */
+        summary.photos_missing ? `${summary.photos_missing} photos not attached` : "",
       ].filter(Boolean);
 
       say(

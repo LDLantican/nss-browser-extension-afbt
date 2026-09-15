@@ -88,6 +88,20 @@ let delivery_tab_id = null;
 let awaiting_submit = false;
 
 /**
+ * Photographs a run offered that the vendor page did not take.
+ *
+ * Module state for the reason the counts are collected at all: report() is the
+ * only place holding a job's `extra`, and it hands back a single outcome
+ * string, so there is nowhere in that return value to put a number. Summed
+ * across the run and folded into the summary as each job finishes.
+ *
+ * Only ever a *partial* shortfall reaches here — a note that could attach none
+ * of its photographs is refused outright by post_note() and never becomes a
+ * delivery at all.
+ */
+let photos_missing = 0;
+
+/**
  * Where the unsubmitted invoice is, across service-worker restarts.
  *
  * `chrome.storage.session` rather than module state, because the worker is
@@ -205,6 +219,11 @@ export async function deliver_now({ manual = false } = {}) {
        `delivered` rather than instead of it, because it is not a money problem
        and must not read like one. */
     left_open: 0,
+
+    /* Photographs offered that the page did not take, across the run. Counted
+       beside `delivered` for the same reason `left_open` is: not a money
+       problem, and it must not read like one. */
+    photos_missing: 0,
     paused: false,
   };
   const reports = [];
@@ -213,6 +232,7 @@ export async function deliver_now({ manual = false } = {}) {
   let preflighted = false;
 
   awaiting_submit = false;
+  photos_missing = 0;
 
   try {
     for (let pass = 0; pass < 20; pass++) {
@@ -310,6 +330,10 @@ export async function deliver_now({ manual = false } = {}) {
            token never got as far as claiming. Tallying either would report a
            failure against a job still sitting in the queue. */
         else if (outcome !== "signed_out" && outcome !== "app_signed_out") summary.failed += 1;
+
+        /* Assigned per job rather than once at the end, because deliver_now has
+           seven return points and every one of them hands back this summary. */
+        summary.photos_missing = photos_missing;
 
         /* A rehearsal puts the job straight back, so a second pass would pick
            the same one up and rehearse it forever. One pass is the whole run. */
@@ -463,6 +487,14 @@ async function deliver_one(delivery, options, reports) {
 
   /* ---- C: the photographs ---------------------------------------------- */
 
+  /* What the pages actually took, against what was offered. A note can succeed
+     having dropped a photograph that would not download — post_note() only
+     refuses when *none* of them arrived — and that shortfall is not a money
+     problem but is still something a person should be told, so it rides back
+     the way work_done does rather than being discarded here. */
+  let photos_offered = 0;
+  let photos_attached = 0;
+
   if (!options.dry_run) {
     const photos = Array.isArray(delivery.photos) ? delivery.photos : [];
 
@@ -482,6 +514,9 @@ async function deliver_one(delivery, options, reports) {
       const posted = await command(`${url}/notes`, "VENDOR_POST_NOTE", { message, photos: batch });
 
       if (posted?.ok !== true) return finish("failed", posted?.error || "The photos could not be posted.");
+
+      photos_offered += Number(posted.photos_offered ?? batch.length) || 0;
+      photos_attached += Number(posted.photos_attached ?? 0) || 0;
     }
   }
 
@@ -541,6 +576,8 @@ async function deliver_one(delivery, options, reports) {
   return finish("delivered", "", {
     external_ref: invoice.external_ref || "",
     work_done: done?.ok === true,
+    photos_offered,
+    photos_attached,
   });
 }
 
@@ -853,6 +890,13 @@ async function report(delivery, options, reports, state, error, extra = {}) {
      `signed_out: true`. It no longer reaches report() at all — deliver_one
      releases the row instead, because nothing had happened to an invoice and
      there was no result to record. */
+
+  /* Counted here rather than returned, because the caller gets a string. A
+     shortfall is not a failure — the invoice is right and the money went — but
+     it is the one thing about a delivered job that nobody would otherwise
+     notice, which is exactly how four text-only notes went out unremarked. */
+  if (state === "delivered")
+    photos_missing += Math.max(0, Number(extra.photos_offered ?? 0) - Number(extra.photos_attached ?? 0));
 
   /* `delivered_open` is not a delivery state and never reaches the server —
      the result was posted as `delivered` just above, which is what it is. It
