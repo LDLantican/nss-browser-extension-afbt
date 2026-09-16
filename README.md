@@ -97,8 +97,8 @@ Stopping is right for a systemic failure — signed out, web app unreachable —
 because the remaining rows would fail the same way. An unreadable id is not
 that: the job is fine, and the link is one click to repair.
 
-The popup also shows what the last Buildertrend run did, per job, as plain text
-meant to be screenshotted or pasted. It exists because this leg once failed six
+**Settings → 4 · Troubleshooting** shows what the last Buildertrend run did, per
+job, as plain text meant to be screenshotted or pasted. It exists because this leg once failed six
 runs in a row while reporting nothing at all.
 
 **On the AppFolio work-order list**, rows are chosen with **AppFolio's own row
@@ -128,8 +128,19 @@ or this device is signed out, every badge says *status unknown* rather than
 showing a remembered value. That is deliberate: a stale badge would cause a
 wrong decision silently, and an honest one costs a click.
 
-**The popup** is the ledger afterwards. Rows needing a person come first, with
-the reason and either a retry or a link to the record.
+**The popup** is written for whoever is doing the day's work, and answers two
+questions: is everything all right, and does anything need me? It shows one
+status line (*All caught up*, *N jobs need your attention*, or *Sending…*), then
+only the rows a person has to act on — each with the reason and one button (*Try
+again*, *Open in web app*, *Link now* or *Add to Buildertrend*) — and a folded
+*Recently sent* list. Its footer says approved work goes out by itself every
+minute and offers **Send now**, which runs the invoice pass and then the
+estimate pass and reports the result in one sentence.
+
+Everything for working out *why* something went wrong is in **Settings → 4 ·
+Troubleshooting** instead: the invoice and estimate runs as separate buttons
+with every count they keep, the vendor-page check, the last Buildertrend run
+reports, clearing the Buildertrend queue, and the tab-error reports.
 
 **Sending is safe to repeat.** The web app keys work orders on client and
 number, so re-sending one either creates it or refreshes a few fields — it can
@@ -213,15 +224,16 @@ and to AppFolio's vendor portal and Buildertrend.** Any number can be — two
 browsers never deliver the same job twice — and a laptop that should not write
 estimates by itself can say so in **Settings → 3 · Buildertrend**.
 
-### Diagnostics
+### Tab errors
 
 Closing a tab on an error takes away the page that showed what went wrong, so a
-report is kept first. **Settings → 4 · Diagnostics** lists them, newest first:
+report is kept first. **Settings → 4 · Troubleshooting** lists them, newest first:
 the time, which leg, the work order, the step, the error, the page address, a
 copy of the page, and a screenshot when the tab happened to be on screen. A tab
 running in the background is never brought forward just to be photographed, so
 delivery reports usually have the page copy and no screenshot. The popup says
-when there are reports you have not looked at.
+*A background task ran into a problem* when there are reports you have not
+looked at, and links straight to them.
 
 The page copy includes what had been typed into the form, and **excludes
 anything that signs anybody in**: scripts, hidden fields, password fields and

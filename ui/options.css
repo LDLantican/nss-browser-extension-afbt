@@ -121,3 +121,26 @@ body {
   border-radius: var(--radius);
   cursor: zoom-in;
 }
+
+/* ---- troubleshooting ----------------------------------------------------- */
+
+/* The card is several small tools in a row, so each gets a heading of its own
+   with room above it. The first one sits under the card's lead paragraph. */
+#troubleshooting h3 {
+  margin: 20px 0 4px;
+  font-size: 13px;
+}
+
+#troubleshooting .field__hint--lead + h3 {
+  margin-top: 0;
+}
+
+#troubleshooting .probe {
+  margin-top: 8px;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+#troubleshooting [hidden] {
+  display: none;
+}

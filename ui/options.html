@@ -209,10 +209,74 @@
         </p>
       </section>
 
-      <section class="card" id="diagnostics">
-        <h2>4 · Diagnostics</h2>
+      <!--
+        Everything the popup deliberately does not show. The popup is for the
+        day's work; this is for working out why something went wrong, and for
+        whoever is asked to. Run now sits first because it is the one thing here
+        a manager may be sent to press.
+      -->
+      <section class="card" id="troubleshooting">
+        <span id="diagnostics"></span>
+        <h2>4 · Troubleshooting</h2>
 
         <p class="field__hint field__hint--lead">
+          Nothing here is needed day to day. Approved work is sent by itself
+          every minute, and the popup lists anything that needs a person. These
+          are for finding out why something did not go through.
+        </p>
+
+        <h3>Run now</h3>
+
+        <p class="field__hint">
+          The same two runs that happen every minute, one at a time, with
+          everything each run counted.
+        </p>
+
+        <p class="card__actions">
+          <button class="btn btn--quiet" type="button" id="deliver-now">Deliver invoices to AppFolio now</button>
+          <button class="btn btn--quiet" type="button" id="estimates-now">Write Buildertrend estimates now</button>
+        </p>
+
+        <pre class="probe" id="run-output" hidden></pre>
+
+        <h3>Check an AppFolio vendor page</h3>
+
+        <p class="field__hint">
+          Reads the vendor-portal tab you used most recently and lists what the
+          extension looks for on it. It clicks and types nothing, so it is safe
+          on a real client's work order.
+        </p>
+
+        <p class="card__actions">
+          <button class="btn btn--quiet" type="button" id="probe">Check the page</button>
+          <button class="link" type="button" id="probe-copy" hidden>Copy</button>
+        </p>
+
+        <pre class="probe" id="probe-output" hidden></pre>
+
+        <div id="bt-troubleshooting">
+          <h3>Last Buildertrend runs</h3>
+
+          <p class="field__hint" id="bt-runs-empty">Nothing to report from the last runs.</p>
+
+          <pre class="probe" id="bt-runs" hidden></pre>
+
+          <p class="card__actions">
+            <button class="link" type="button" id="bt-runs-copy" hidden>Copy</button>
+          </p>
+
+          <h3>Buildertrend queue</h3>
+
+          <p class="field__hint" id="bt-queue-note"></p>
+
+          <p class="card__actions">
+            <button class="link link--danger" type="button" id="bt-queue-clear">Clear the Buildertrend queue</button>
+          </p>
+        </div>
+
+        <h3>Tab errors</h3>
+
+        <p class="field__hint">
           Every tab this extension opens is closed when something goes wrong in
           it, so what the tab showed is kept here instead: where it was, what it
           was doing, the error, a copy of the page, and a screenshot when the

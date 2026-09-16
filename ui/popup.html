@@ -3,31 +3,25 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NSS Appfolio Helper</title>
+    <title>ASH Helper</title>
     <link rel="stylesheet" href="common.css" />
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <!--
-      Two sections, in the order they matter. The web app is the pipeline that
-      is being built and the one the day's billing depends on; Buildertrend is
-      the errand that may go away, so it sits second and disappears entirely
-      when it is switched off in Settings.
+      The popup answers two questions, for whoever is doing the day's work: is
+      everything all right, and does anything need me? Everything that answers
+      "why did this go wrong" — page checks, run reports, the per-step buttons —
+      is in Settings > Troubleshooting, where there is room to read it.
     -->
     <header class="bar">
-      <h1>Appfolio Helper</h1>
+      <h1>ASH Helper</h1>
       <button type="button" class="link" id="open-settings">Settings</button>
     </header>
 
+    <!-- Outside <main>, so a sign-in that lapses while the popup is open can
+         still be explained above the setup panel it falls back to. -->
     <p class="notice notice--warn" id="alert" hidden></p>
-
-    <!-- Only when a tab this extension opened was closed on an error that
-         nobody has looked at yet. The reports live in Settings, because they
-         carry screenshots and a popup is no place to read one. -->
-    <p class="notice notice--warn" id="tab-errors" hidden>
-      <span id="tab-errors-text"></span>
-      <button type="button" class="link" id="tab-errors-view">View</button>
-    </p>
 
     <!-- Shown only when there is nothing configured or nobody signed in. There
          is no point rendering a queue to somebody who cannot send it. -->
@@ -40,50 +34,42 @@
     </section>
 
     <main id="main" hidden>
-      <section class="panel">
-        <div class="panel__head">
-          <h2>Web app</h2>
-          <span class="panel__who" id="who"></span>
-        </div>
+      <p class="who" id="who"></p>
 
-        <p class="tally" id="sync-tally"></p>
+      <p class="status" id="status"></p>
 
-        <ul class="jobs" id="jobs"></ul>
+      <section class="panel" id="attention" hidden>
+        <h2>Needs your attention</h2>
 
-        <p class="panel__actions" id="sync-actions"></p>
+        <ul class="jobs" id="attention-list"></ul>
+
+        <p class="panel__actions" id="attention-actions"></p>
       </section>
 
-      <section class="panel" id="delivery-panel">
-        <div class="panel__head">
-          <h2>Deliveries</h2>
-        </div>
+      <details class="panel recent" id="recent" hidden>
+        <summary id="recent-summary">Recently sent</summary>
 
-        <p class="tally" id="delivery-tally"></p>
+        <ul class="jobs" id="recent-list"></ul>
 
-        <pre class="probe" id="delivery-probe" hidden></pre>
-
-        <p class="panel__actions" id="delivery-actions"></p>
-      </section>
-
-      <section class="panel" id="bt-panel">
-        <div class="panel__head">
-          <h2>Buildertrend</h2>
-        </div>
-
-        <p class="tally" id="bt-tally"></p>
-
-        <ul class="jobs" id="bt-jobs"></ul>
-
-        <ul class="jobs" id="bt-pending"></ul>
-
-        <pre class="probe" id="bt-probe" hidden></pre>
-
-        <p class="panel__actions" id="bt-actions"></p>
-      </section>
+        <p class="panel__actions">
+          <button type="button" class="link" id="recent-clear">Clear this list</button>
+        </p>
+      </details>
     </main>
 
-    <footer class="foot">
-      <span id="foot-note"></span>
+    <footer class="foot" id="foot" hidden>
+      <p>
+        <span id="auto-note">Approved work is sent to AppFolio automatically every minute.</span>
+        <button type="button" class="link" id="send-now">Send now</button>
+      </p>
+
+      <!-- Only when a tab this extension opened was closed on an error that
+           nobody has looked at yet. The reports carry screenshots, so they are
+           read in Settings. -->
+      <p class="foot__problem" id="tab-errors" hidden>
+        A background task ran into a problem.
+        <button type="button" class="link" id="tab-errors-view">See details</button>
+      </p>
     </footer>
 
     <script type="module" src="popup.js"></script>

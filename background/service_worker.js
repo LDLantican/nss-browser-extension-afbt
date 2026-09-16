@@ -42,7 +42,7 @@ import { notify, set_badge } from "./notify.js";
 import { api, normalize_base, origin_pattern } from "./api.js";
 import { fill_job, run_queue, find_existing_job } from "./buildertrend.js";
 import { deliver_estimates_now } from "./estimates.js";
-import { close_owned_tab } from "./owned_tabs.js";
+import { close_owned_tab, is_owned } from "./owned_tabs.js";
 import {
   deliver_now,
   is_delivery_alarm,
@@ -60,6 +60,28 @@ function text_of(payload) {
   if (typeof payload === "string") return payload;
 
   return typeof payload?.message === "string" ? payload.message : "";
+}
+
+/**
+ * The vendor-portal tab a page check should read.
+ *
+ * The active tab when it is one — that is the page the person is looking at.
+ * Otherwise the vendor tab they used most recently, because the check is now
+ * run from Settings, which is a tab of its own and so is always the active one.
+ * Tabs this extension opened are skipped: they belong to a run, and a check
+ * that read one mid-fill would describe a page nobody chose.
+ */
+async function probe_target() {
+  const is_vendor = (tab) => String(tab?.url || "").startsWith("https://vendor.appfolio.com");
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (is_vendor(active) && !is_owned(active.id)) return active;
+
+  const tabs = await chrome.tabs.query({ url: "https://vendor.appfolio.com/*" });
+
+  return tabs
+    .filter((tab) => !is_owned(tab.id))
+    .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0] || null;
 }
 
 /** Keeps the toolbar badge honest without anybody having to remember to. */
@@ -231,24 +253,23 @@ const handlers = {
    * client's work order — which matters, because there is no AppFolio sandbox
    * and the alternative is finding out by submitting something.
    *
-   * Deliberately the *active* tab rather than the delivery tab. The point is to
-   * inspect a page a person opened and is looking at.
+   * Deliberately a tab a person opened rather than the delivery tab — the
+   * active one if it is on the portal, else the most recently used. It is run
+   * from Settings > Troubleshooting now, so see probe_target().
    */
   async PROBE_PAGE() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await probe_target();
 
-    if (!tab?.id) return { ok: false, error: "No active tab." };
-
-    if (!String(tab.url || "").startsWith("https://vendor.appfolio.com"))
+    if (!tab?.id)
       return {
         ok: false,
-        error: "Open an AppFolio vendor work order first, then check this page.",
+        error: "Open an AppFolio vendor work order in another tab first, then check again.",
       };
 
     try {
       const report = await chrome.tabs.sendMessage(tab.id, { type: "VENDOR_PAGE_PROBE" });
 
-      return { ok: true, report };
+      return { ok: true, report: { ...report, tab_title: tab.title || tab.url || "" } };
     } catch {
       return {
         ok: false,
@@ -509,6 +530,42 @@ const handlers = {
    */
   async DELIVER_ESTIMATES() {
     return deliver_estimates_now({ manual: true });
+  },
+
+  /**
+   * The popup's one "Send now": invoices, then estimates, as a single pass.
+   *
+   * It shares the alarm's `scheduled_pass` guard rather than calling the two
+   * handlers above one after the other, so a press during a timed pass does not
+   * start a second run beside it — and the answer to that press is "already
+   * sending", which is true, rather than a summary of nothing.
+   *
+   * Estimates run here even when `bt_auto_estimates` is off. That setting is
+   * about what happens with nobody watching; pressing the button is somebody
+   * choosing, which is exactly what that browser was set up to wait for.
+   */
+  async SEND_NOW() {
+    if (scheduled_pass !== null) return { ok: true, busy: true };
+
+    const failed = (error) => ({ ok: false, error: String(error?.message || error) });
+    let answer = { ok: true };
+
+    scheduled_pass = (async () => {
+      const invoices = await deliver_now({ manual: true }).catch(failed);
+      const config = await settings();
+
+      const estimates = config.buildertrend_enabled !== false
+        ? await deliver_estimates_now({ manual: true }).catch(failed)
+        : null;
+
+      answer = { ok: true, invoices, estimates };
+    })().finally(() => {
+      scheduled_pass = null;
+    });
+
+    await scheduled_pass;
+
+    return answer;
   },
 
   async CLEAR_BT_QUEUE() {

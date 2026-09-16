@@ -14,7 +14,23 @@
  * password is sent once to be exchanged for a token, and what this browser
  * keeps is the token — revocable from the web app's account page without
  * anybody having to change a password.
+ *
+ * It is also where Troubleshooting lives: everything the popup deliberately
+ * leaves out — the separate invoice and estimate runs with every count they
+ * keep, the vendor-page check, the last Buildertrend run reports, and the
+ * tab-error reports.
  */
+
+import {
+  REASONS,
+  delivery_details,
+  describe_bt_run,
+  describe_estimate_run,
+  describe_probe,
+  describe_reports,
+  scope_note,
+  NEWLINE,
+} from "./describe.js";
 
 const els = {
   alert: document.getElementById("alert"),
@@ -47,6 +63,19 @@ const els = {
   bt_client_row_id: document.getElementById("bt-client-row-id"),
   bt_cost_code: document.getElementById("bt-cost-code"),
   bt_save: document.getElementById("bt-save"),
+
+  deliver_now: document.getElementById("deliver-now"),
+  estimates_now: document.getElementById("estimates-now"),
+  run_output: document.getElementById("run-output"),
+  probe: document.getElementById("probe"),
+  probe_copy: document.getElementById("probe-copy"),
+  probe_output: document.getElementById("probe-output"),
+  bt_troubleshooting: document.getElementById("bt-troubleshooting"),
+  bt_runs: document.getElementById("bt-runs"),
+  bt_runs_empty: document.getElementById("bt-runs-empty"),
+  bt_runs_copy: document.getElementById("bt-runs-copy"),
+  bt_queue_note: document.getElementById("bt-queue-note"),
+  bt_queue_clear: document.getElementById("bt-queue-clear"),
 
   tab_errors_list: document.getElementById("tab-errors-list"),
   tab_errors_empty: document.getElementById("tab-errors-empty"),
@@ -100,6 +129,7 @@ async function render() {
   els.bt_client_row_id.value = settings.bt_client_row_id || "";
   els.bt_cost_code.value = settings.bt_cost_code || "";
   toggle_bt_fields();
+  render_troubleshooting(state);
 
   const signed_in = state.session?.signed_in === true;
 
@@ -321,7 +351,208 @@ els.bt_save.addEventListener("click", async () => {
   say("Buildertrend settings saved.", "ok");
 });
 
-/* ---- diagnostics ---------------------------------------------------------- */
+/* ---- troubleshooting: run now --------------------------------------------- */
+
+/**
+ * Puts a button in its working state for the length of `work`, then back.
+ *
+ * Present-tense labels, because both runs and the page check can take the
+ * better part of a minute, and a disabled button with its original text on it
+ * looks dead for that long.
+ */
+async function busy(element, label, work) {
+  const idle = element.textContent;
+
+  element.disabled = true;
+  element.textContent = label;
+
+  try {
+    return await work();
+  } finally {
+    element.disabled = false;
+    element.textContent = idle;
+  }
+}
+
+function show_output(element, text) {
+  element.hidden = text === "";
+  element.textContent = text;
+}
+
+async function copy(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+    say(`${what} copied.`, "ok");
+  } catch {
+    say("Could not copy to the clipboard.", "error");
+  }
+}
+
+els.deliver_now.addEventListener("click", () =>
+  busy(els.deliver_now, "Delivering…", async () => {
+    const result = await ask("DELIVER_NOW");
+    const summary = result.summary || {};
+
+    show_output(els.run_output, "");
+
+    if (result.skipped === "already running") {
+      say("A delivery run is already going. Try again when it finishes.", "warn");
+
+      return;
+    }
+
+    if (result.ok === false) {
+      say(REASONS[result.error] || summary.reason || result.error || "Delivery could not run.", "error");
+
+      return;
+    }
+
+    /* Ahead of `paused`, because there is a filled invoice on a tab waiting for
+       somebody, and "nothing was waiting" would be the opposite of the truth. */
+    if (summary.awaiting_submit === true) {
+      say(summary.reason || "An invoice is filled in and waiting to be submitted.", "warn");
+
+      return;
+    }
+
+    if (summary.paused === true) {
+      say(summary.reason || "Delivery is paused because too much has failed recently.", "warn");
+
+      return;
+    }
+
+    /* A rehearsal's whole output is what it found, so it goes in the block
+       rather than being compressed into the one-line notice. */
+    if (summary.dry_run === true) {
+      show_output(els.run_output, describe_reports(result.reports || []));
+      say(`Rehearsed${scope_note(summary)} without writing anything. Nothing was submitted.`, "ok");
+
+      return;
+    }
+
+    const parts = delivery_details(summary);
+
+    say(
+      parts.length === 0
+        ? `Nothing was waiting to be delivered${scope_note(summary)}.`
+        : parts.join(" · ") + scope_note(summary) + ".",
+      summary.unconfirmed || summary.failed || summary.blocked ? "warn" : "ok",
+    );
+  }));
+
+els.estimates_now.addEventListener("click", () =>
+  busy(els.estimates_now, "Writing…", async () => {
+    const result = await ask("DELIVER_ESTIMATES");
+    const summary = result.summary || {};
+
+    if (result.skipped === "already running")
+      say("An estimate run is already going. Try again when it finishes.", "warn");
+    else if (result.ok === false)
+      say(summary.reason || REASONS[result.error] || result.error || "The estimates could not be written.", "error");
+    else if ((summary.delivered || 0) > 0) say(`${summary.delivered} written to Buildertrend.`, "ok");
+    else if ((summary.rehearsed || 0) > 0) say(`${summary.rehearsed} rehearsed. Nothing was written.`, "ok");
+    else say("Nothing was waiting for an estimate.", "ok");
+
+    /* The run keeps its own account in storage, so the report below is
+       redrawn from there rather than from this answer. */
+    render_troubleshooting(await ask("STATE"));
+  }));
+
+/* ---- troubleshooting: the vendor-page check -------------------------------- */
+
+els.probe.addEventListener("click", () =>
+  busy(els.probe, "Checking…", async () => {
+    const result = await ask("PROBE_PAGE");
+
+    if (result.ok === false) {
+      show_output(els.probe_output, "");
+      els.probe_copy.hidden = true;
+      say(result.error || "Could not read that page.", "warn");
+
+      return;
+    }
+
+    say("");
+    show_output(els.probe_output, describe_probe(result.report || {}));
+    els.probe_copy.hidden = false;
+  }));
+
+els.probe_copy.addEventListener("click", () => copy(els.probe_output.textContent, "Page check"));
+
+/* ---- troubleshooting: Buildertrend ----------------------------------------- */
+
+/**
+ * The last job-creation and estimate runs, and the queue.
+ *
+ * The job-creation run is only shown when it has something to say about a
+ * failure — on a clean run it is noise. An estimate run that touched no job and
+ * hit no error has nothing to account for either.
+ */
+function render_troubleshooting(state) {
+  const bt_on = state.settings?.buildertrend_enabled !== false;
+
+  els.bt_troubleshooting.hidden = !bt_on;
+  els.estimates_now.hidden = !bt_on;
+
+  if (!bt_on) return;
+
+  const pending = Object.keys(state.bt_pending_links || {}).length;
+  const run = state.bt_last_run;
+  const run_worth_showing =
+    run && ((run.summary?.unidentified || 0) > 0 || (run.summary?.failed || 0) > 0 || pending > 0);
+
+  const estimate = state.bt_last_estimate_run;
+  const estimate_worth_showing =
+    estimate && ((estimate.reports || []).length > 0 || estimate.error || estimate.summary?.reason);
+
+  const text = [
+    run_worth_showing ? describe_bt_run(run) : "",
+    estimate_worth_showing ? describe_estimate_run(estimate) : "",
+  ].filter(Boolean).join(NEWLINE + NEWLINE);
+
+  show_output(els.bt_runs, text);
+  els.bt_runs_empty.hidden = text !== "";
+  els.bt_runs_copy.hidden = text === "";
+
+  const queued = Object.keys(state.bt_queue || {}).length;
+
+  els.bt_queue_note.textContent = queued === 0
+    ? "Nothing is waiting to be added to Buildertrend."
+    : `${queued} work order${queued === 1 ? " is" : "s are"} waiting to be added to Buildertrend. `
+      + "Clearing the queue forgets them here; the work orders stay in the web app.";
+  els.bt_queue_clear.hidden = queued === 0;
+}
+
+els.bt_runs_copy.addEventListener("click", () => copy(els.bt_runs.textContent, "Run report"));
+
+/* Two presses, the same as clearing tab errors, because this forgets work that
+   is written nowhere else in the extension. CLEAR_BT_QUEUE touches the queue
+   only — v1's "Clear All" called storage.local.clear(), which would now sign
+   the manager out as a side effect of tidying a list. */
+let queue_clear_armed = null;
+
+els.bt_queue_clear.addEventListener("click", async () => {
+  if (queue_clear_armed === null) {
+    els.bt_queue_clear.textContent = "Press again to clear the queue";
+    queue_clear_armed = setTimeout(() => {
+      queue_clear_armed = null;
+      els.bt_queue_clear.textContent = "Clear the Buildertrend queue";
+    }, 4000);
+
+    return;
+  }
+
+  clearTimeout(queue_clear_armed);
+  queue_clear_armed = null;
+  els.bt_queue_clear.textContent = "Clear the Buildertrend queue";
+
+  const result = await ask("CLEAR_BT_QUEUE");
+
+  say(`Cleared ${result.removed || 0} from the Buildertrend queue.`, "ok");
+  render_troubleshooting(await ask("STATE"));
+});
+
+/* ---- troubleshooting: tab errors ------------------------------------------- */
 
 /**
  * The reports kept when an owned tab was closed on an error.

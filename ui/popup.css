@@ -41,35 +41,116 @@ body {
   margin: 10px 12px 0;
 }
 
+main[hidden] {
+  display: none;
+}
+
+.who {
+  padding: 8px 12px 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.who[hidden] {
+  display: none;
+}
+
+/* ---- the one-line answer ------------------------------------------------- */
+
+/* The first thing read, and most days the only thing. Sized up from the body
+   text so "All caught up" can be taken in without reading anything else. */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 10px;
+  padding: 10px 12px;
+  border: 1px solid;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.status::before {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 11px;
+  color: #fff;
+}
+
+.status--ok {
+  background: var(--good-soft);
+  border-color: #6ee7b7;
+  color: var(--good);
+}
+
+.status--ok::before {
+  content: "\2713";
+  background: var(--good);
+}
+
+.status--warn {
+  background: var(--warn-soft);
+  border-color: #fcd34d;
+  color: var(--warn);
+}
+
+.status--warn::before {
+  content: "!";
+  background: var(--warn);
+}
+
+.status--busy {
+  background: var(--paper);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+
+.status--busy::before {
+  content: "";
+  border: 2px solid var(--line);
+  border-top-color: var(--ink-soft);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status--busy::before {
+    animation: none;
+  }
+}
+
+/* ---- panels -------------------------------------------------------------- */
+
 .panel {
   padding: 12px;
   background: var(--paper);
+  border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+}
+
+.panel + .panel {
+  border-top: 0;
 }
 
 .panel[hidden] {
   display: none;
 }
 
-.panel__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--gap);
-  margin-bottom: 6px;
-}
-
-.panel__who {
-  font-size: 11px;
-  color: var(--ink-faint);
-  text-align: right;
-
-  /* The signed-in name can be long and it is the least important thing on the
-     line, so it is what gives way. */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 60%;
+.panel h2 {
+  margin-bottom: 4px;
 }
 
 .panel__actions {
@@ -84,18 +165,25 @@ body {
   display: none;
 }
 
-.tally {
+/* Folded by default: what went through is reassurance, not work. */
+.recent summary {
+  cursor: pointer;
   font-size: 12px;
+  font-weight: 700;
   color: var(--ink-soft);
 }
 
-/* ---- the ledger ---------------------------------------------------------- */
+.recent summary:hover {
+  color: var(--ink);
+}
+
+/* ---- job rows ------------------------------------------------------------ */
 
 .jobs {
   list-style: none;
   max-height: 260px;
   overflow-y: auto;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .jobs:empty {
@@ -103,7 +191,7 @@ body {
 }
 
 .job {
-  padding: 7px 0;
+  padding: 8px 0;
   border-top: 1px solid var(--line);
 }
 
@@ -123,10 +211,23 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Pushes the actions to the right of the row without needing a spacer. */
-.job__go {
+/* The row's action sits at the right without needing a spacer. Whatever
+   follows it (a quiet Remove) sits beside it. */
+.job__head > .job__go,
+.job__head > a.link {
   margin-left: auto;
+}
+
+.job__go {
   padding: 3px 8px;
+  font-size: 11px;
+}
+
+.job__head > a.link {
+  font-size: 12px;
+}
+
+.job__head .link--danger {
   font-size: 11px;
 }
 
@@ -136,31 +237,36 @@ body {
 }
 
 /* The reason a row failed, and the thing a manager is actually reading. Given
-   room to wrap over several lines rather than truncated: "already exists at X
-   but arrived for Y" is useless cut in half. */
+   room to wrap rather than truncated: "already exists at X but arrived for Y"
+   is useless cut in half. */
 .job__why {
   margin-top: 2px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--bad);
-}
-
-.job__actions {
-  margin-top: 3px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--gap);
-  font-size: 11px;
 }
 
 /* ---- footer -------------------------------------------------------------- */
 
 .foot {
   margin-top: auto;
-  padding: 8px 12px;
+  padding: 10px 12px;
   font-size: 11px;
   color: var(--ink-faint);
 }
 
-.foot:empty {
+.foot[hidden] {
+  display: none;
+}
+
+.foot .link {
+  font-size: 11px;
+}
+
+.foot__problem {
+  margin-top: 6px;
+  color: var(--warn);
+}
+
+.foot__problem[hidden] {
   display: none;
 }
