@@ -572,6 +572,69 @@ export async function reconcile(numbers) {
   return { ok: true, found: Object.keys(found).length };
 }
 
+/** Ledger states that describe a work order the web app held when last asked. */
+const LANDED = new Set(["synced", "conflict"]);
+
+/** The numbers refresh_ledger() wants the web app's answer for. */
+export async function landed_numbers() {
+  return Object.values(await sync_jobs())
+    .filter((job) => LANDED.has(job.state))
+    .map((job) => String(job.number));
+}
+
+/**
+ * Bring the finished rows up to date with what the web app holds now — the
+ * popup's pass, run each time it opens.
+ *
+ * Not reconcile(), and the difference is the whole point. reconcile() runs
+ * straight after a batch, where "synced but not on the server" means a response
+ * was lost, and its answer is to send the row again. Here the row was confirmed
+ * present by an earlier lookup, so its absence means somebody removed the work
+ * order from the web app — and re-sending would quietly re-create exactly what
+ * they removed. So a missing row is forgotten, never re-queued.
+ *
+ * Rows still in flight, and rows that never landed, are not touched: neither
+ * describes anything the web app holds.
+ *
+ * `found` is the lookup's `work_orders` map, or null when the lookup could not
+ * be made. Not knowing is never a reason to delete, so null removes nothing —
+ * but it does drop each row's remembered status, because a label the popup
+ * cannot vouch for is a stale one, and "Open in the web app" is the honest
+ * fallback.
+ */
+export async function refresh_ledger(found) {
+  let removed = 0;
+
+  await update_sync_jobs((jobs) => {
+    const next = { ...jobs };
+
+    for (const [number, job] of Object.entries(jobs)) {
+      if (!LANDED.has(job.state)) continue;
+
+      if (found === null) {
+        if (job.server) next[number] = { ...job, server: null };
+
+        continue;
+      }
+
+      const server = found[number] || null;
+
+      if (!server) {
+        delete next[number];
+        removed++;
+
+        continue;
+      }
+
+      next[number] = { ...job, work_order_id: server.id, server };
+    }
+
+    return next;
+  });
+
+  return { removed };
+}
+
 /**
  * What the web app currently holds for a page of numbers, for the badges.
  *

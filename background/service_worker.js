@@ -31,6 +31,7 @@ import {
   bt_last_run,
   save_bt_last_run,
   bt_last_estimate_run,
+  save_bt_last_estimate_run,
   migrate_bt_unrecorded,
 } from "./store.js";
 import { notify, set_badge } from "./notify.js";
@@ -90,6 +91,93 @@ const handlers = {
       bt_last_estimate_run: last_estimate,
       suggested_device_name: auth.suggested_device_name(),
     };
+  },
+
+  /**
+   * Check everything the popup remembers against what the web app holds now.
+   *
+   * Everything STATE returns is this extension's own memory, and memory outlives
+   * the things it describes: work orders removed from the web app kept showing as
+   * synced, as waiting to be linked to Buildertrend, and in the run reports. So
+   * the popup asks for this once each time it opens, and whatever describes a
+   * work order the web app no longer has is forgotten.
+   *
+   * One lookup answers all three stores. A lookup that fails deletes nothing —
+   * being unable to ask is never evidence that something is gone.
+   *
+   * The Buildertrend queue is deliberately left alone. It is work on its way to
+   * Buildertrend, which does not depend on the web app holding the number.
+   */
+  async REFRESH() {
+    const [ledger, pending, last_run, last_estimate] = await Promise.all([
+      sync.landed_numbers(),
+      bt_pending_links(),
+      bt_last_run(),
+      bt_last_estimate_run(),
+    ]);
+
+    const numbers = [
+      ...new Set([
+        ...ledger,
+        ...Object.keys(pending),
+        ...(last_run?.jobs || []).map((job) => String(job.number)),
+        ...(last_estimate?.reports || []).map((report) => String(report.number)),
+      ]),
+    ].filter((number) => number !== "");
+
+    const removed = { synced: 0, pending: 0, runs: 0 };
+
+    if (numbers.length === 0) return { ok: true, removed };
+
+    const found = await lookup_all(numbers);
+
+    if (found.ok === false) {
+      /* Still drops the remembered status labels, which is the one thing a
+         failed lookup does make wrong. */
+      await sync.refresh_ledger(null);
+
+      return { ok: false, reason: found.reason, error: found.error, removed };
+    }
+
+    const held = found.work_orders;
+
+    removed.synced = (await sync.refresh_ledger(held)).removed;
+
+    /* Gone from the web app, there is nothing to link against; already holding a
+       URL, it was linked some other way. Either way the Link now button could
+       only fail or do nothing. */
+    const settled = Object.keys(pending).filter(
+      (number) => !held[number] || (held[number].buildertrend_url || "") !== "",
+    );
+
+    if (settled.length > 0) await forget_pending_links(settled);
+
+    removed.pending = settled.length;
+
+    /* A run report is history, so its summary line is left as it was — but the
+       jobs it names that no longer exist are dropped, and a report left naming
+       nothing is removed rather than shown. */
+    if ((last_run?.jobs || []).length > 0) {
+      const jobs = last_run.jobs.filter((job) => held[String(job.number)]);
+
+      if (jobs.length !== last_run.jobs.length) {
+        await save_bt_last_run(jobs.length === 0 ? null : { ...last_run, jobs });
+        removed.runs++;
+      }
+    }
+
+    if ((last_estimate?.reports || []).length > 0) {
+      const reports = last_estimate.reports.filter((report) => held[String(report.number)]);
+
+      if (reports.length !== last_estimate.reports.length) {
+        await save_bt_last_estimate_run(reports.length === 0 ? null : { ...last_estimate, reports });
+        removed.runs++;
+      }
+    }
+
+    await refresh_badge();
+
+    return { ok: true, removed };
   },
 
   /* ---- delivery ---------------------------------------------------------- */
@@ -667,6 +755,40 @@ async function flush_pending_links() {
   if (settled.length > 0) await forget_pending_links(settled);
 
   return settled.length;
+}
+
+/** Matches the web app's work_orders.api.lookup_max. */
+const LOOKUP_MAX = 500;
+
+/**
+ * What the web app holds for any number of work orders, as one map.
+ *
+ * All or nothing: one failed chunk fails the whole answer, because a partial
+ * map would read the unasked numbers as gone.
+ */
+async function lookup_all(numbers) {
+  const work_orders = {};
+
+  for (let index = 0; index < numbers.length; index += LOOKUP_MAX) {
+    let answer;
+
+    try {
+      answer = await api.lookup(numbers.slice(index, index + LOOKUP_MAX));
+    } catch (error) {
+      return { ok: false, reason: "unreachable", error: error?.message || "Could not reach the web app." };
+    }
+
+    if (!answer.ok)
+      return {
+        ok: false,
+        reason: answer.status === 401 ? "signed_out" : "error",
+        error: answer.body?.error || `The web app answered ${answer.status}.`,
+      };
+
+    Object.assign(work_orders, answer.body?.work_orders || {});
+  }
+
+  return { ok: true, work_orders };
 }
 
 async function drop_from_bt_queue(numbers) {

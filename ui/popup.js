@@ -121,6 +121,10 @@ async function render() {
     : "";
   els.foot_note.textContent = stamp === "" ? "" : `Last checked ${stamp}`;
 
+  if (refreshed) return;
+
+  refreshed = true;
+
   /* A heartbeat on open, so a token revoked from /account is noticed here
      rather than at the moment a manager tries to sync twenty rows. */
   const beat = await ask("HEARTBEAT");
@@ -128,12 +132,39 @@ async function render() {
   if (beat.status === "signed_out") {
     say(beat.error || "This device is no longer signed in.", "error");
     render();
-  } else if (beat.status === "unreachable") {
+
+    return;
+  }
+
+  if (beat.status === "unreachable") {
     say(`Cannot reach the web app right now. ${beat.error || ""}`.trim(), "warn");
   } else {
     say("");
   }
+
+  /* What was just drawn is the extension's memory. This checks it against the
+     web app and draws again, so a work order removed there stops showing here.
+     Local first, because it is instant and the lookup is a round trip. */
+  const fresh = await ask("REFRESH");
+  const removed = fresh.removed || {};
+  const cleared = (removed.synced || 0) + (removed.pending || 0);
+
+  await render();
+
+  if (cleared > 0)
+    say(
+      `${cleared} work order${cleared === 1 ? "" : "s"} no longer in the web app ${cleared === 1 ? "was" : "were"} cleared.`,
+      "ok",
+    );
 }
+
+/**
+ * Set once the open-time checks have run.
+ *
+ * render() is called again after every action, and those re-renders only need
+ * to redraw — the heartbeat and the refresh belong to opening the popup.
+ */
+let refreshed = false;
 
 /**
  * " against test work orders", or nothing at all.
@@ -789,9 +820,14 @@ function render_bt(state) {
 
   /* The estimate run's own account, kept because the banner that used to carry
      it is cleared by the popup's heartbeat on the next open — so the first
-     rehearsal reported its result to nobody. */
+     rehearsal reported its result to nobody.
+
+     A run that touched no job and hit no error has nothing to account for, and
+     shown forever it reads as a report about work that is not there. */
   const estimate_run = state.bt_last_estimate_run;
-  const estimate_text = estimate_run ? describe_estimate_run(estimate_run) : "";
+  const estimate_worth_showing =
+    estimate_run && ((estimate_run.reports || []).length > 0 || estimate_run.error || estimate_run.summary?.reason);
+  const estimate_text = estimate_worth_showing ? describe_estimate_run(estimate_run) : "";
 
   const text = [worth_showing ? describe_bt_run(run) : "", estimate_text].filter(Boolean).join(NEWLINE + NEWLINE);
 
