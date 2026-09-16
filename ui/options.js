@@ -19,6 +19,9 @@
  * leaves out — the separate invoice and estimate runs with every count they
  * keep, the vendor-page check, the last Buildertrend run reports, and the
  * tab-error reports.
+ *
+ * Each of those four is a tab, one panel at a time. The hash names the tab, so
+ * the popup can open options.html#troubleshooting straight onto it.
  */
 
 import {
@@ -82,6 +85,11 @@ const els = {
   tab_errors_copy: document.getElementById("tab-errors-copy"),
   tab_errors_download: document.getElementById("tab-errors-download"),
   tab_errors_clear: document.getElementById("tab-errors-clear"),
+
+  tabs: [...document.querySelectorAll('[role="tab"]')],
+  tab_app_dot: document.getElementById("tab-app-dot"),
+  tab_sign_in_dot: document.getElementById("tab-sign-in-dot"),
+  tab_errors_count: document.getElementById("tab-errors-count"),
 };
 
 async function ask(type, payload = {}) {
@@ -104,6 +112,65 @@ function say(text, kind = "ok") {
   els.alert.className = `notice notice--${kind}`;
 }
 
+/* ---- tabs ------------------------------------------------------------------ */
+
+const TAB_NAMES = els.tabs.map((tab) => tab.dataset.tab);
+
+let current_tab = null;
+
+function tab_from_hash() {
+  const name = decodeURIComponent(location.hash.slice(1));
+
+  return TAB_NAMES.includes(name) ? name : null;
+}
+
+function select_tab(name, { focus = false } = {}) {
+  if (!TAB_NAMES.includes(name)) return;
+
+  for (const tab of els.tabs) {
+    const selected = tab.dataset.tab === name;
+
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    document.getElementById(tab.getAttribute("aria-controls")).hidden = !selected;
+
+    if (selected && focus) tab.focus();
+  }
+
+  current_tab = name;
+
+  if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
+  if (name === "troubleshooting") mark_tab_errors_seen();
+}
+
+for (const tab of els.tabs) {
+  tab.addEventListener("click", () => select_tab(tab.dataset.tab));
+
+  tab.addEventListener("keydown", (event) => {
+    const index = TAB_NAMES.indexOf(tab.dataset.tab);
+    const last = TAB_NAMES.length - 1;
+    const next = {
+      ArrowDown: index === last ? 0 : index + 1,
+      ArrowRight: index === last ? 0 : index + 1,
+      ArrowUp: index === 0 ? last : index - 1,
+      ArrowLeft: index === 0 ? last : index - 1,
+      Home: 0,
+      End: last,
+    }[event.key];
+
+    if (next === undefined) return;
+
+    event.preventDefault();
+    select_tab(TAB_NAMES[next], { focus: true });
+  });
+}
+
+window.addEventListener("hashchange", () => {
+  const name = tab_from_hash();
+
+  if (name && name !== current_tab) select_tab(name);
+});
+
 function trim_trailing_slashes(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
@@ -112,6 +179,7 @@ async function render() {
   const state = await ask("STATE");
 
   if (state.ok === false) {
+    if (current_tab === null) select_tab("app");
     say(state.error || "Could not read the extension's settings.", "error");
 
     return;
@@ -132,6 +200,14 @@ async function render() {
   render_troubleshooting(state);
 
   const signed_in = state.session?.signed_in === true;
+
+  els.tab_app_dot.hidden = Boolean(settings.app_url);
+  els.tab_sign_in_dot.hidden = signed_in;
+
+  /* The first render picks the tab when the hash did not: the first step
+     still to do, or the address when nothing is. */
+  if (current_tab === null)
+    select_tab(settings.app_url && !signed_in ? "sign-in" : "app");
 
   els.signed_in.hidden = !signed_in;
   els.sign_in_form.hidden = signed_in;
@@ -261,7 +337,8 @@ els.app_form.addEventListener("submit", async (event) => {
         `and ${saved.cleared} row${saved.cleared === 1 ? "" : "s"} were cleared from the sync list — they described work orders in ${saved.previous_url}`,
       );
 
-    say(`${parts.join(" ")}. Sign in below to carry on.`, "warn");
+    say(`${parts.join(" ")}. Sign in to carry on.`, "warn");
+    select_tab("sign-in");
   } else {
     say("Address saved.", "ok");
   }
@@ -557,9 +634,10 @@ els.bt_queue_clear.addEventListener("click", async () => {
 /**
  * The reports kept when an owned tab was closed on an error.
  *
- * Read here rather than in the popup because they carry screenshots. Opening
- * this page is what counts as having looked, which is what clears the line in
- * the popup.
+ * Read here rather than in the popup because they carry screenshots. Showing
+ * the Troubleshooting tab is what counts as having looked, which is what clears
+ * the line in the popup — opening the page on another tab is not, because the
+ * reports are not on screen.
  */
 let tab_reports = [];
 
@@ -572,8 +650,12 @@ async function render_tab_errors() {
   els.tab_errors_empty.hidden = tab_reports.length > 0;
   els.tab_errors_copy.disabled = tab_reports.length === 0;
   els.tab_errors_download.disabled = tab_reports.length === 0;
+  els.tab_errors_count.hidden = tab_reports.length === 0;
+  els.tab_errors_count.textContent = String(tab_reports.length);
+}
 
-  await ask("TAB_ERRORS_SEEN");
+function mark_tab_errors_seen() {
+  ask("TAB_ERRORS_SEEN");
 }
 
 function report_item(report) {
@@ -718,6 +800,8 @@ els.tab_errors_clear.addEventListener("click", async () => {
   await render_tab_errors();
   say("Tab-error reports cleared.", "ok");
 });
+
+if (tab_from_hash()) select_tab(tab_from_hash());
 
 render();
 render_tab_errors();

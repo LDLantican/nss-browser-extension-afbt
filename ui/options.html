@@ -17,15 +17,35 @@
         </p>
       </header>
 
+      <div class="settings">
+      <!--
+        Order matters here: nothing else works until there is an address, and
+        signing in needs one to sign in to. So the tabs read top to bottom as
+        the order they must be done in, and a dot marks a step still to do.
+      -->
+      <nav class="tabs" role="tablist" aria-orientation="vertical" aria-label="Settings">
+        <button class="tab" type="button" role="tab" id="tab-app" data-tab="app" aria-controls="panel-app" aria-selected="false" tabindex="-1">
+          <span class="tab__label">Web app</span>
+          <span class="tab__dot" id="tab-app-dot" title="No address saved yet" hidden></span>
+        </button>
+        <button class="tab" type="button" role="tab" id="tab-sign-in" data-tab="sign-in" aria-controls="panel-sign-in" aria-selected="false" tabindex="-1">
+          <span class="tab__label">Sign in</span>
+          <span class="tab__dot" id="tab-sign-in-dot" title="Not signed in" hidden></span>
+        </button>
+        <button class="tab" type="button" role="tab" id="tab-buildertrend" data-tab="buildertrend" aria-controls="panel-buildertrend" aria-selected="false" tabindex="-1">
+          <span class="tab__label">Buildertrend</span>
+        </button>
+        <button class="tab" type="button" role="tab" id="tab-troubleshooting" data-tab="troubleshooting" aria-controls="panel-troubleshooting" aria-selected="false" tabindex="-1">
+          <span class="tab__label">Troubleshooting</span>
+          <span class="tab__count" id="tab-errors-count" title="Tab errors recorded" hidden></span>
+        </button>
+      </nav>
+
+      <main class="settings__main">
       <p class="notice" id="alert" hidden></p>
 
-      <!--
-        Order matters here: nothing below works until there is an address, and
-        signing in needs one to sign in to. So the sections read top to bottom
-        as the order they must be done in.
-      -->
-      <section class="card">
-        <h2>1 · The web app</h2>
+      <section class="card" role="tabpanel" id="panel-app" aria-labelledby="tab-app" hidden>
+        <h2>The web app</h2>
 
         <form id="app-form">
           <label class="field">
@@ -53,8 +73,8 @@
         </form>
       </section>
 
-      <section class="card">
-        <h2>2 · Sign in</h2>
+      <section class="card" role="tabpanel" id="panel-sign-in" aria-labelledby="tab-sign-in" hidden>
+        <h2>Sign in</h2>
 
         <!-- Shown when signed in. -->
         <div id="signed-in" hidden>
@@ -126,8 +146,8 @@
         </form>
       </section>
 
-      <section class="card">
-        <h2>3 · Buildertrend</h2>
+      <section class="card" role="tabpanel" id="panel-buildertrend" aria-labelledby="tab-buildertrend" hidden>
+        <h2>Buildertrend</h2>
 
         <label class="check">
           <input type="checkbox" id="bt-enabled" />
@@ -215,9 +235,8 @@
         whoever is asked to. Run now sits first because it is the one thing here
         a manager may be sent to press.
       -->
-      <section class="card" id="troubleshooting">
-        <span id="diagnostics"></span>
-        <h2>4 · Troubleshooting</h2>
+      <section class="card" role="tabpanel" id="panel-troubleshooting" aria-labelledby="tab-troubleshooting" hidden>
+        <h2>Troubleshooting</h2>
 
         <p class="field__hint field__hint--lead">
           Nothing here is needed day to day. Approved work is sent by itself
@@ -296,6 +315,8 @@
 
         <ol class="reports" id="tab-errors-list"></ol>
       </section>
+      </main>
+      </div>
     </div>
 
     <script type="module" src="options.js"></script>

@@ -2,9 +2,10 @@
    The options page
    =============================================================================
 
-   Opens in a tab (options_ui.open_in_tab), so it gets a reading measure rather
-   than filling a 1400px window — one column, capped, centred. The numbered
-   cards read as the order the steps must be done in, because they are: there is
+   Opens in a tab (options_ui.open_in_tab), so it gets a capped, centred measure
+   rather than filling a 1400px window: a sidebar of tabs and one panel beside
+   it, the way Claude's own extension settings are laid out. The tabs read top
+   to bottom as the order the steps must be done in, because they are: there is
    nothing to sign in to before there is an address.
    ========================================================================== */
 
@@ -14,16 +15,121 @@ body {
 }
 
 .page {
-  max-width: 34rem;
+  max-width: 52rem;
   margin-inline: auto;
 }
 
 .page__head {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 .page__head h1 {
   margin-bottom: 4px;
+}
+
+/* ---- tabs ---------------------------------------------------------------- */
+
+.settings {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 24px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius);
+}
+
+.tab:hover {
+  color: var(--ink);
+  background: #f0f0f0;
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--maroon);
+  outline-offset: -2px;
+}
+
+.tab[aria-selected="true"] {
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--paper);
+  border-left-color: var(--maroon);
+}
+
+.tab__label {
+  flex: 1;
+  white-space: nowrap;
+}
+
+/* A step still to do. */
+.tab__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.tab__count {
+  min-width: 18px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  color: var(--bad);
+  background: var(--bad-soft);
+  border-radius: 9px;
+}
+
+.tab__dot[hidden],
+.tab__count[hidden],
+[role="tabpanel"][hidden] {
+  display: none;
+}
+
+@media (width < 640px) {
+  .settings {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .tabs {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .tab {
+    width: auto;
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+  }
+
+  .tab[aria-selected="true"] {
+    background: transparent;
+    border-bottom-color: var(--maroon);
+  }
 }
 
 #alert {
@@ -32,7 +138,6 @@ body {
 
 .card {
   padding: 16px;
-  margin-bottom: 16px;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -126,21 +231,21 @@ body {
 
 /* The card is several small tools in a row, so each gets a heading of its own
    with room above it. The first one sits under the card's lead paragraph. */
-#troubleshooting h3 {
+#panel-troubleshooting h3 {
   margin: 20px 0 4px;
   font-size: 13px;
 }
 
-#troubleshooting .field__hint--lead + h3 {
+#panel-troubleshooting .field__hint--lead + h3 {
   margin-top: 0;
 }
 
-#troubleshooting .probe {
+#panel-troubleshooting .probe {
   margin-top: 8px;
   max-height: 24rem;
   overflow-y: auto;
 }
 
-#troubleshooting [hidden] {
+#panel-troubleshooting [hidden] {
   display: none;
 }
