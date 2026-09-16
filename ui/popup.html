@@ -21,6 +21,14 @@
 
     <p class="notice notice--warn" id="alert" hidden></p>
 
+    <!-- Only when a tab this extension opened was closed on an error that
+         nobody has looked at yet. The reports live in Settings, because they
+         carry screenshots and a popup is no place to read one. -->
+    <p class="notice notice--warn" id="tab-errors" hidden>
+      <span id="tab-errors-text"></span>
+      <button type="button" class="link" id="tab-errors-view">View</button>
+    </p>
+
     <!-- Shown only when there is nothing configured or nobody signed in. There
          is no point rendering a queue to somebody who cannot send it. -->
     <section class="panel" id="setup" hidden>

@@ -149,12 +149,15 @@ background/     the service worker: all network, credentials and queues
   delivery.js     draining the delivery queue into the Appfolio vendor portal
   portals.js      is anybody signed in to the vendor portal / Buildertrend
   buildertrend.js opening and driving the Buildertrend tab
+  owned_tabs.js   which tabs this extension opened, locking them, closing them
+  tab_errors.js   what a tab showed when a run gave up on it
   notify.js       notifications and the toolbar badge
 content/        the page scripts
   appfolio_scrape.js       shared reader, loaded first in both AppFolio entries
   appfolio_list.js         badges, the action bar, reading AppFolio's ticks
   appfolio_work_order.js   the single work-order page
   buildertrend_add_job.js  v1's form filler, near enough unchanged
+  tab_guard.js             the lock on a tab the extension is working in
 ui/             popup and options
 ```
 
@@ -166,6 +169,57 @@ headers at all.
 
 No build step, no dependencies, no bundler — the browser loads these files as
 they are.
+
+## The tabs it opens
+
+Three things open a tab and drive it: delivering invoices into the vendor
+portal, creating Buildertrend jobs, and writing Buildertrend estimates. Each tab
+is recorded in `background/owned_tabs.js`, and nothing else is ever treated as
+the extension's — a vendor-portal or Buildertrend tab you opened yourself is
+never adopted, locked or closed.
+
+**While a run is working in one, the tab is locked.** A banner says what it is
+doing, and every real click, tap, scroll and keystroke in the page is swallowed.
+The automation is unaffected, because what it does to the page produces events
+the browser marks as untrusted, and only trusted ones are blocked.
+
+**What a page cannot stop** is the tab being closed, reloaded, or navigated from
+the address bar, Back button or a browser shortcut. Closing is detected: a run
+whose tab you close stops, and says so, rather than opening another behind your
+back. So don't close one mid-run unless you mean to stop it.
+
+**The lock cannot outlive the run.** The page asks every three seconds whether
+it is still locked, and the answer comes only from the running service worker.
+If that worker is gone — crashed, evicted, extension reloaded — the answer is
+"no", the banner lifts, and the next worker closes the tab it left behind.
+
+**A tab is closed when its run finishes, and whenever something goes wrong in
+it**, whether the run was scheduled or started from the popup. Two are handed to
+you instead — unlocked, brought forward, and left alone from then on:
+
+- a **sign-in page**, when AppFolio or Buildertrend has signed you out;
+- a **filled invoice waiting for Submit Invoice**, when automatic submitting is
+  off.
+
+### Diagnostics
+
+Closing a tab on an error takes away the page that showed what went wrong, so a
+report is kept first. **Settings → 4 · Diagnostics** lists them, newest first:
+the time, which leg, the work order, the step, the error, the page address, a
+copy of the page, and a screenshot when the tab happened to be on screen. A tab
+running in the background is never brought forward just to be photographed, so
+delivery reports usually have the page copy and no screenshot. The popup says
+when there are reports you have not looked at.
+
+The page copy includes what had been typed into the form, and **excludes
+anything that signs anybody in**: scripts, hidden fields, password fields and
+anything named like a token are stripped. The last 50 reports are kept, and the
+newest 10 keep their screenshot and page copy. **Copy as text** leaves the
+pictures out; **Download JSON** includes them.
+
+They stay in this browser. Each report is one JSON object with a version number,
+handed to a list of destinations of which this browser is currently the only
+one, so sending them to the web app later is an addition rather than a rewrite.
 
 ## Sample mode
 

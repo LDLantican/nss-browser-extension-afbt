@@ -33,11 +33,16 @@ import {
   bt_last_estimate_run,
   save_bt_last_estimate_run,
   migrate_bt_unrecorded,
+  tab_errors,
+  clear_tab_errors,
+  tab_errors_seen_at,
+  mark_tab_errors_seen,
 } from "./store.js";
 import { notify, set_badge } from "./notify.js";
 import { api, normalize_base, origin_pattern } from "./api.js";
 import { fill_job, run_queue, find_existing_job } from "./buildertrend.js";
 import { deliver_estimates_now } from "./estimates.js";
+import { close_owned_tab } from "./owned_tabs.js";
 import {
   deliver_now,
   is_delivery_alarm,
@@ -66,16 +71,19 @@ const handlers = {
   /* ---- state the UI renders from ---------------------------------------- */
 
   async STATE() {
-    const [config, session, counts, jobs, queue, pending, last_run, last_estimate] = await Promise.all([
-      settings(),
-      auth.state(),
-      sync.summary(),
-      sync.sync_jobs_snapshot(),
-      bt_queue(),
-      bt_pending_links(),
-      bt_last_run(),
-      bt_last_estimate_run(),
-    ]);
+    const [config, session, counts, jobs, queue, pending, last_run, last_estimate, errors, seen_at] =
+      await Promise.all([
+        settings(),
+        auth.state(),
+        sync.summary(),
+        sync.sync_jobs_snapshot(),
+        bt_queue(),
+        bt_pending_links(),
+        bt_last_run(),
+        bt_last_estimate_run(),
+        tab_errors(),
+        tab_errors_seen_at(),
+      ]);
 
     return {
       settings: config,
@@ -89,8 +97,29 @@ const handlers = {
       bt_pending_links: pending,
       bt_last_run: last_run,
       bt_last_estimate_run: last_estimate,
+      /* A count and not the reports: they carry screenshots, and the popup
+         only says how many there are and where to read them. */
+      tab_errors_unseen: errors.filter((entry) => entry.at > seen_at).length,
       suggested_device_name: auth.suggested_device_name(),
     };
+  },
+
+  /* ---- tab-error reports, for the Diagnostics card in Settings ----------- */
+
+  async TAB_ERRORS() {
+    return { ok: true, reports: await tab_errors() };
+  },
+
+  async TAB_ERRORS_SEEN() {
+    await mark_tab_errors_seen();
+
+    return { ok: true };
+  },
+
+  async CLEAR_TAB_ERRORS() {
+    await clear_tab_errors();
+
+    return { ok: true };
   },
 
   /**
@@ -185,9 +214,9 @@ const handlers = {
   /**
    * Work the delivery queue now, rather than waiting for the alarm.
    *
-   * `manual` reaches deliver_now() so the tab is left open afterwards: somebody
-   * who pressed a button wants to see what happened, and a scheduled run that
-   * left a tab behind every minute would be intolerable.
+   * `manual` is only recorded, on any tab-error report the run writes. It used
+   * to leave the tab open afterwards so somebody could see what happened; every
+   * run closes its tab now, and the report is what is left to look at.
    */
   async DELIVER_NOW() {
     return deliver_now({ manual: true });
@@ -535,7 +564,12 @@ const handlers = {
 
     if (!work_order) return { ok: false, error: "That work order is not in the queue." };
 
-    return fill_job(work_order, config);
+    const outcome = await fill_job(work_order, config);
+
+    /* One job, so nothing reuses the tab. A failure closed it already. */
+    if (outcome.tab_id) await close_owned_tab(outcome.tab_id);
+
+    return outcome;
   },
 
   /**

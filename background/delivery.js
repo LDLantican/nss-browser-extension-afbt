@@ -39,16 +39,35 @@
  *
  * ## Differences from the Buildertrend orchestration next door
  *
- * That one opens a focused tab on purpose, because it dims the page while it
- * works and a manager should see it happening. This runs in a **background**
- * tab and reuses one tab for the whole run: a queue of forty jobs that steals
- * focus forty times is unusable, and the manager is meant to be doing something
- * else while it drains.
+ * That one brings its tab forward, because Buildertrend's job picker does not
+ * render in a hidden tab. This runs in a **background** tab and reuses one tab
+ * for the whole run: a queue of forty jobs that steals focus forty times is
+ * unusable, and the manager is meant to be doing something else while it
+ * drains.
+ *
+ * ## The tab is locked, and closed when anything goes wrong
+ *
+ * It is opened through background/owned_tabs.js, which locks it against a
+ * person's clicks and keystrokes for as long as the run holds it. A job that
+ * fails records a report — see background/tab_errors.js — and closes the tab,
+ * and the next job opens a clean one. Closing is the one interruption a page
+ * cannot prevent, so a tab a person closes stops the run rather than being
+ * quietly replaced.
+ *
+ * Two tabs are handed over instead of closed, because a person has to use
+ * them: a sign-in page, and a filled invoice waiting for Submit Invoice.
  */
 
 import { api, fetch_photo, NetworkError } from "./api.js";
 import { check_signed_in, show_sign_in } from "./portals.js";
 import { scope_admits } from "./scope.js";
+import {
+  closed_by_person,
+  close_owned_tab,
+  hand_over,
+  lock,
+  open_owned_tab,
+} from "./owned_tabs.js";
 
 const VENDOR_ORIGIN = "https://vendor.appfolio.com";
 const VENDOR_HOME = `${VENDOR_ORIGIN}/`;
@@ -77,6 +96,18 @@ let running = false;
 
 /** The tab this run uses, so a queue of forty opens one tab and not forty. */
 let delivery_tab_id = null;
+
+/** Set when a person closed the run's tab, which stops the run. */
+let tab_closed = false;
+
+const TAB_CLOSED = "The vendor portal tab was closed while a delivery was running, so the run stopped.";
+
+/** What the tab's overlay says, and what a report names as the step. */
+let current_label = "Delivering invoices";
+let current_step = "";
+
+/** Whether somebody pressed the button, for the report. */
+let run_kind = "scheduled";
 
 /**
  * Set when a run filled an invoice that a person still has to submit.
@@ -113,9 +144,9 @@ let photos_missing = 0;
  */
 const AWAITING_KEY = "nss_awaiting_submit_url";
 
-async function remember_awaiting(url) {
+async function remember_awaiting(url, tab_id) {
   try {
-    await chrome.storage.session.set({ [AWAITING_KEY]: url });
+    await chrome.storage.session.set({ [AWAITING_KEY]: { url, tab_id } });
   } catch {
     /* Storage is a convenience here; the in-run break below is what actually
        stops a second invoice being filled over the first. */
@@ -138,23 +169,23 @@ async function clear_awaiting() {
  * because of a page nobody can see.
  */
 async function invoice_is_waiting() {
-  let url;
+  let waiting;
 
   try {
-    ({ [AWAITING_KEY]: url } = await chrome.storage.session.get(AWAITING_KEY));
+    ({ [AWAITING_KEY]: waiting } = await chrome.storage.session.get(AWAITING_KEY));
   } catch {
     return null;
   }
 
-  if (!url) return null;
+  if (!waiting?.url) return null;
 
-  try {
-    const tabs = await chrome.tabs.query({ url });
+  /* The tab it was left in, not any tab at that address. A manager who opens
+     the same invoice page herself has not got an invoice waiting in it. */
+  const tab = Number.isInteger(waiting.tab_id)
+    ? await chrome.tabs.get(waiting.tab_id).catch(() => null)
+    : null;
 
-    if (tabs.length > 0) return url;
-  } catch {
-    return null;
-  }
+  if (tab?.url && same_page(tab.url, waiting.url)) return waiting.url;
 
   await clear_awaiting();
 
@@ -206,6 +237,10 @@ export async function deliver_now({ manual = false } = {}) {
     };
 
   running = true;
+  tab_closed = false;
+  run_kind = manual ? "manual" : "scheduled";
+  current_label = "Delivering invoices";
+  current_step = "";
 
   const summary = {
     delivered: 0,
@@ -308,6 +343,8 @@ export async function deliver_now({ manual = false } = {}) {
           return { ok: false, error: "vendor_signed_out", summary };
         }
 
+        if (tab_closed) return { ok: false, error: TAB_CLOSED, summary };
+
         /* `unknown` proceeds. It is the answer for a slow page as well as an
            unrecognised one, and refusing to drain on it would let one sluggish
            load stop the day's billing. deliver_one still has every guard it
@@ -334,6 +371,14 @@ export async function deliver_now({ manual = false } = {}) {
         /* Assigned per job rather than once at the end, because deliver_now has
            seven return points and every one of them hands back this summary. */
         summary.photos_missing = photos_missing;
+
+        /* Before the rehearsal's early return, so a rehearsal whose tab was
+           closed says so rather than reporting a failed job and nothing else. */
+        if (tab_closed) {
+          summary.reason = TAB_CLOSED;
+
+          return { ok: false, error: TAB_CLOSED, summary };
+        }
 
         /* A rehearsal puts the job straight back, so a second pass would pick
            the same one up and rehearse it forever. One pass is the whole run. */
@@ -370,30 +415,23 @@ export async function deliver_now({ manual = false } = {}) {
 
     return { ok: true, summary, reports };
   } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof NetworkError ? error.message : error?.message || "Delivery stopped.",
-      summary,
-    };
+    const message = error instanceof NetworkError ? error.message : error?.message || "Delivery stopped.";
+
+    await close_delivery_tab({ state: "failed", step: current_step, error: message });
+
+    return { ok: false, error: message, summary };
   } finally {
     running = false;
 
-    /* Left open on a manual run so a manager can see what happened; closed on a
-       scheduled one so an unattended queue does not leave a tab behind every
-       minute.
-       
-       **And left open whenever a filled invoice is waiting to be submitted**,
-       scheduled or not. With auto_submit off, the run fills the form, checks
-       the total to the cent and reports "press Submit Invoice on the vendor
-       page" — and then this closed the page, so there was nothing to press and
-       the manager would have had to type the whole invoice again. The message
-       described a page that no longer existed.
-       
-       The tab-every-minute worry does not apply here, because the job is
-       reported `blocked` and `blocked` is not claimable: the queue will not
-       pick it up again next minute. One tab per invoice that needs a person,
-       which is exactly as many as there are people-shaped decisions waiting. */
-    if (!manual && !awaiting_submit) await close_delivery_tab();
+    /* Closed at the end of every run, manual or scheduled. A tab somebody has
+       to use — a sign-in page, or a filled invoice waiting for Submit Invoice —
+       was handed over where that was decided, which also forgot it, so this
+       leaves it alone. A job that failed closed its own tab when it reported.
+
+       The job with an invoice waiting is reported `blocked`, and `blocked` is
+       not claimable, so the next scheduled run does not pick it up and fill it
+       over the top of her. */
+    await close_delivery_tab();
   }
 }
 
@@ -422,6 +460,10 @@ async function deliver_one(delivery, options, reports) {
 
   const finish = (state, error = "", extra = {}) => report(delivery, options, reports, state, error, extra);
 
+  current_label = `Delivering work order ${delivery.number}`;
+  current_step = "A: locate";
+  lock(delivery_tab_id, current_label);
+
   /* ---- A: find the job and read what should stop it -------------------- */
 
   const located = await locate(delivery);
@@ -440,7 +482,7 @@ async function deliver_one(delivery, options, reports) {
    * returned to the queue — Save has been pressed by then. */
   if (located.signed_out) {
     await api.release_delivery(delivery.id).catch(() => null);
-    await show_sign_in(delivery_tab_id);
+    await hand_over_delivery_tab();
 
     return "signed_out";
   }
@@ -479,6 +521,8 @@ async function deliver_one(delivery, options, reports) {
   /* ---- B: accept, if nobody has ---------------------------------------- */
 
   if (located.needs_accepting && !options.dry_run) {
+    current_step = "B: accept";
+
     const accepted = await command(url, "VENDOR_ACCEPT", {});
 
     if (accepted?.ok !== true)
@@ -496,6 +540,8 @@ async function deliver_one(delivery, options, reports) {
   let photos_attached = 0;
 
   if (!options.dry_run) {
+    current_step = "C: photos";
+
     const photos = Array.isArray(delivery.photos) ? delivery.photos : [];
 
     for (let index = 0; index < photos.length; index += PHOTOS_PER_NOTE) {
@@ -522,6 +568,8 @@ async function deliver_one(delivery, options, reports) {
 
   /* ---- D: the invoice --------------------------------------------------- */
 
+  current_step = "D: invoice";
+
   const invoice = await command(`${url}/invoices`, "VENDOR_SUBMIT_INVOICE", {
     delivery_id: delivery.id,
     items: delivery.invoice?.items || [],
@@ -545,7 +593,12 @@ async function deliver_one(delivery, options, reports) {
        with nothing sent. */
     if (invoice?.awaiting_submit === true) {
       awaiting_submit = true;
-      await remember_awaiting(`${url}/invoices`);
+      await remember_awaiting(`${url}/invoices`, delivery_tab_id);
+
+      /* Hers now. Unlocked so Submit Invoice can be pressed, and forgotten so
+         neither the end of this run nor the next one closes or reuses it. */
+      await hand_over(delivery_tab_id);
+      delivery_tab_id = null;
     }
     if (invoice?.blocked === true) return finish("blocked", invoice.error);
     if (invoice?.unconfirmed === true) return finish("unconfirmed", invoice.error);
@@ -559,6 +612,8 @@ async function deliver_one(delivery, options, reports) {
     return finish("dry_run", "", { read_back: invoice.read_back || "", expected: invoice.expected || "" });
 
   /* ---- E: work done ---------------------------------------------------- */
+
+  current_step = "E: work done";
 
   /* Deliberately not fatal. The money is the delivery, and a job left In
      Progress with a correct invoice on it is untidy — reporting it as failed
@@ -815,7 +870,7 @@ async function preflight_vendor(first) {
   /* Put the sign-in page in front of her. The tab is already on it — being
      redirected there is what produced the verdict — so this is a focus and not
      a navigation, and nothing is typed into it. */
-  if (verdict.state === "signed_out") await show_sign_in(tab_id);
+  if (verdict.state === "signed_out") await hand_over_delivery_tab();
 
   return verdict;
 }
@@ -830,18 +885,24 @@ async function preflight_vendor(first) {
 async function command(url, type, payload) {
   const tab_id = await ensure_delivery_tab(url);
 
-  if (tab_id === null) return { ok: false, error: "Could not open an AppFolio vendor portal tab." };
+  if (tab_id === null)
+    return { ok: false, error: tab_closed ? TAB_CLOSED : "Could not open an AppFolio vendor portal tab." };
 
   await navigate(tab_id, url);
 
   const state = await ask_page_state(tab_id);
 
+  /* Checked before reading the page's answer, because a person closing the tab
+     produces exactly the symptoms below and deserves its own words. */
+  if (noticed_closed(tab_id)) return { ok: false, error: TAB_CLOSED };
   if (state === "signed_out") return { ok: false, signed_out: true, error: "The vendor portal is signed out." };
   if (state !== "ready") return { ok: false, error: "The vendor portal page did not finish loading." };
 
   try {
     return await with_timeout(chrome.tabs.sendMessage(tab_id, { type, payload }), STEP_MS);
   } catch {
+    if (noticed_closed(tab_id)) return { ok: false, error: TAB_CLOSED };
+
     return { ok: false, error: "The vendor portal tab stopped responding." };
   }
 }
@@ -854,6 +915,18 @@ async function command(url, type, payload) {
  * attempt and eventually trip the circuit breaker on a system that works.
  */
 async function report(delivery, options, reports, state, error, extra = {}) {
+  /* A job that went wrong closes its tab, and says what the tab showed first.
+     `blocked` is not in this: it is a decision made from what the page said,
+     not a page that misbehaved. */
+  if (state === "failed" || state === "unconfirmed")
+    await close_delivery_tab({
+      number: delivery.number,
+      state,
+      step: current_step,
+      error,
+      detail: extra.read_back ? { read_back: extra.read_back } : null,
+    });
+
   if (state === "dry_run" || (options.dry_run && state !== "skipped")) {
     if (reports)
       reports.push({
@@ -956,12 +1029,19 @@ async function ensure_delivery_tab(url) {
     const existing = await chrome.tabs.get(delivery_tab_id).catch(() => null);
     if (existing?.id) return existing.id;
 
+    /* Kept rather than cleared, so the failure this causes is reported
+       against the tab a person closed. */
+    if (noticed_closed(delivery_tab_id)) return null;
+
     delivery_tab_id = null;
   }
 
+  /* Not reopened behind a person's back. They closed it; the run stops. */
+  if (tab_closed) return null;
+
   /* Not focused. See the note at the top: forty jobs stealing focus forty times
      is worse than no automation at all. */
-  const tab = await chrome.tabs.create({ url, active: false }).catch(() => null);
+  const tab = await open_owned_tab("delivery", url, { active: false, label: current_label });
   if (!tab?.id) return null;
 
   delivery_tab_id = tab.id;
@@ -970,13 +1050,43 @@ async function ensure_delivery_tab(url) {
   return tab.id;
 }
 
-async function close_delivery_tab() {
-  if (delivery_tab_id === null) return;
+/** Notes a person closing the tab, and answers whether they did. */
+function noticed_closed(tab_id) {
+  if (tab_id === null || !closed_by_person(tab_id)) return false;
 
+  tab_closed = true;
+
+  return true;
+}
+
+/**
+ * Close the run's tab, with a report when `failure` says what went wrong.
+ *
+ * The next job opens a fresh tab, which is also a clean page: nothing a failed
+ * job left half-done on a form is inherited by the one after it. A tab a
+ * person already closed is still reported, and says so.
+ */
+async function close_delivery_tab(failure = null) {
   const id = delivery_tab_id;
   delivery_tab_id = null;
 
-  await chrome.tabs.remove(id).catch(() => null);
+  if (id === null) return;
+
+  await close_owned_tab(
+    id,
+    failure === null ? null : { owner: "delivery", label: current_label, run: run_kind, ...failure },
+  );
+}
+
+/** A sign-in page in front of her, unlocked and no longer this run's. */
+async function hand_over_delivery_tab() {
+  const id = delivery_tab_id;
+  delivery_tab_id = null;
+
+  if (id === null) return;
+
+  await hand_over(id);
+  await show_sign_in(id);
 }
 
 /**

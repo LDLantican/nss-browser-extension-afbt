@@ -21,6 +21,8 @@ const KEYS = {
   bt_pending_links: "bt_pending_links",
   bt_last_run: "bt_last_run",
   bt_last_estimate_run: "bt_last_estimate_run",
+  tab_errors: "tab_errors",
+  tab_errors_seen_at: "tab_errors_seen_at",
 };
 
 const DEFAULT_SETTINGS = {
@@ -204,6 +206,34 @@ export function bt_last_estimate_run() {
 
 export function save_bt_last_estimate_run(value) {
   return update(KEYS.bt_last_estimate_run, null, () => value);
+}
+
+/**
+ * What an owned tab looked like when a run gave up on it, newest first.
+ *
+ * Kept because the tab is closed on every error now, and the page was the only
+ * evidence of what went wrong. background/tab_errors.js decides what goes in a
+ * report and how many carry a screenshot; this only stores the list.
+ */
+export function tab_errors() {
+  return read(KEYS.tab_errors, []);
+}
+
+export function update_tab_errors(mutator) {
+  return update(KEYS.tab_errors, [], mutator);
+}
+
+export function clear_tab_errors() {
+  return update(KEYS.tab_errors, [], () => []);
+}
+
+/** When somebody last looked at the reports, so the popup only mentions new ones. */
+export function tab_errors_seen_at() {
+  return read(KEYS.tab_errors_seen_at, 0);
+}
+
+export function mark_tab_errors_seen() {
+  return update(KEYS.tab_errors_seen_at, 0, () => Date.now());
 }
 
 /**

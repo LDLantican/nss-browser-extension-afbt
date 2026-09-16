@@ -54,6 +54,7 @@ import { api } from "./api.js";
 import { check_signed_in, show_sign_in } from "./portals.js";
 import { SAMPLE_TITLE_PREFIX } from "./scope.js";
 import { settings, save_bt_last_estimate_run } from "./store.js";
+import { close_owned_tab, hand_over, lock, open_owned_tab, owned_tab } from "./owned_tabs.js";
 
 const ESTIMATE_URL = "https://buildertrend.net/app/Estimate";
 const TARGET = "buildertrend";
@@ -66,10 +67,14 @@ const HANDSHAKE_MS = 30000;
 let running = false;
 let estimate_tab_id = null;
 
+/** What the tab's overlay says and a report names. */
+let current_label = "Writing Buildertrend estimates";
+
 export async function deliver_estimates_now({ manual = false } = {}) {
   if (running) return { ok: true, skipped: "already running" };
 
   running = true;
+  current_label = "Writing Buildertrend estimates";
 
   try {
     /* One recording point for the whole run.
@@ -92,9 +97,10 @@ export async function deliver_estimates_now({ manual = false } = {}) {
   } finally {
     running = false;
 
-    /* Left open on a manual run so somebody can see what happened; closed on a
-       scheduled one so an unattended queue does not leave a tab behind. */
-    if (!manual) await close_tab();
+    /* Closed at the end of every run. A job that went wrong closed its own tab
+       with a report as it finished, and a signed-out tab was handed over, so
+       what is left here is a tab with nothing to say. */
+    await close_tab();
   }
 }
 
@@ -173,6 +179,8 @@ async function attempt_estimates() {
     const portal = await check_signed_in(TARGET, tab);
 
     if (portal.state === "signed_out") {
+      estimate_tab_id = null;
+      await hand_over(tab);
       await show_sign_in(tab);
 
       return {
@@ -218,6 +226,8 @@ async function attempt_estimates() {
 
     return { ok: true, summary, reports };
   } catch (error) {
+    await close_tab({ state: "failed", error: String(error?.message || error) });
+
     return { ok: false, error: String(error?.message || error), summary, reports };
   }
 }
@@ -255,6 +265,9 @@ async function write_one(delivery, options, reports) {
   if (claim.status === 409) return "skipped";
   if (claim.status === 401) return "signed_out";
   if (!claim.ok) return finish(delivery, options, reports, "failed", "That estimate could not be claimed.");
+
+  current_label = `Writing the estimate for work order ${delivery.number}`;
+  lock(estimate_tab_id, current_label);
 
   const estimate = delivery.estimate || null;
 
@@ -430,8 +443,9 @@ async function write_one(delivery, options, reports) {
  * screen ever catches up — which is why a failure here is a note on the report
  * and not a refusal.
  *
- * It matters anyway: the tab is left open, and somebody who opens it should see
- * the job that was just estimated rather than whichever one was selected last.
+ * It mattered more when the tab was left open for somebody to look at; runs now
+ * close it. It is kept because it is harmless, and because Buildertrend
+ * remembers the selected job for the next time anybody opens the screen.
  *
  * One POST that needs no painting, then a reload, so the tab can stay in the
  * background exactly as the invoice drainer's does. **There is no picker
@@ -588,6 +602,12 @@ function expected_title(delivery) {
 }
 
 async function finish(delivery, options, reports, state, error, extra = {}) {
+  /* A job that went wrong closes the tab and records what it showed. The next
+     job opens a fresh one, so nothing a failed write left on the screen is
+     inherited. `blocked` is a decision, not a misbehaving page. */
+  if (state === "failed" || state === "unconfirmed")
+    await close_tab({ number: delivery.number, state, error });
+
   /* Every outcome is reported, not only a rehearsal's. It used to push a
      report on the dry-run branch alone, so the first real write produced a
      summary line reading "1 unconfirmed" and no word anywhere about which work
@@ -621,16 +641,12 @@ async function finish(delivery, options, reports, state, error, extra = {}) {
 /* ---- tab plumbing, the same shape delivery.js uses ---------------------- */
 
 async function ensure_tab() {
-  /* Module state is not enough on its own. The service worker is evicted after
-     about thirty seconds idle, so `estimate_tab_id` is null on the next press
-     and a fresh tab was opened every single time — four of them during one
-     afternoon's testing. The tab itself is the durable record, so it is found
-     by looking for it. */
-  if (estimate_tab_id === null) {
-    const open = await chrome.tabs.query({ url: `${ESTIMATE_URL}*` }).catch(() => []);
-
-    if (open.length > 0) estimate_tab_id = open[0].id;
-  }
+  /* Module state is not enough on its own: the service worker is evicted after
+     about thirty seconds idle, so `estimate_tab_id` is null on the next press.
+     This used to find the tab again by its address, which also found a
+     Buildertrend estimate tab the manager had opened herself — and would now
+     lock and close it. The registry only knows tabs this extension opened. */
+  if (estimate_tab_id === null) estimate_tab_id = await owned_tab("estimates");
 
   if (estimate_tab_id !== null) {
     const existing = await chrome.tabs.get(estimate_tab_id).catch(() => null);
@@ -647,7 +663,7 @@ async function ensure_tab() {
     estimate_tab_id = null;
   }
 
-  const tab = await chrome.tabs.create({ url: ESTIMATE_URL, active: false }).catch(() => null);
+  const tab = await open_owned_tab("estimates", ESTIMATE_URL, { active: false, label: current_label });
   if (!tab?.id) return null;
 
   estimate_tab_id = tab.id;
@@ -656,11 +672,17 @@ async function ensure_tab() {
   return tab.id;
 }
 
-async function close_tab() {
-  if (estimate_tab_id === null) return;
-
-  await chrome.tabs.remove(estimate_tab_id).catch(() => null);
+/** Close the tab, with a report when `failure` says what went wrong. */
+async function close_tab(failure = null) {
+  const id = estimate_tab_id;
   estimate_tab_id = null;
+
+  if (id === null) return;
+
+  await close_owned_tab(
+    id,
+    failure === null ? null : { owner: "estimates", label: current_label, run: "manual", ...failure },
+  );
 }
 
 function wait_for_load(tab_id, timeout = HANDSHAKE_MS) {

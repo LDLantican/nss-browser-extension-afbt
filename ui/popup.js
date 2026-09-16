@@ -36,6 +36,9 @@ const els = {
   delivery_probe: document.getElementById("delivery-probe"),
   foot_note: document.getElementById("foot-note"),
   open_settings: document.getElementById("open-settings"),
+  tab_errors: document.getElementById("tab-errors"),
+  tab_errors_text: document.getElementById("tab-errors-text"),
+  tab_errors_view: document.getElementById("tab-errors-view"),
 };
 
 /** Human wording for each ledger state, and whether it needs a person. */
@@ -107,6 +110,12 @@ async function render() {
 
   els.setup.hidden = true;
   els.main.hidden = false;
+
+  const unseen = Number(state.tab_errors_unseen) || 0;
+
+  els.tab_errors.hidden = unseen === 0;
+  els.tab_errors_text.textContent =
+    `${unseen} tab error${unseen === 1 ? "" : "s"} recorded since you last looked.`;
 
   els.who.textContent = state.session.user?.name
     ? `${state.session.user.name} · ${state.session.device_name || "this browser"}`
@@ -875,5 +884,9 @@ function render_bt(state) {
 
 els.open_settings.addEventListener("click", () => chrome.runtime.openOptionsPage());
 els.setup_go.addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+/* Straight to the Diagnostics card rather than the top of Settings. */
+els.tab_errors_view.addEventListener("click", () =>
+  chrome.tabs.create({ url: chrome.runtime.getURL("ui/options.html#diagnostics") }));
 
 render();

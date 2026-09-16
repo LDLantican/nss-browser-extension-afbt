@@ -46,6 +46,12 @@ const els = {
   bt_client_row_id: document.getElementById("bt-client-row-id"),
   bt_cost_code: document.getElementById("bt-cost-code"),
   bt_save: document.getElementById("bt-save"),
+
+  tab_errors_list: document.getElementById("tab-errors-list"),
+  tab_errors_empty: document.getElementById("tab-errors-empty"),
+  tab_errors_copy: document.getElementById("tab-errors-copy"),
+  tab_errors_download: document.getElementById("tab-errors-download"),
+  tab_errors_clear: document.getElementById("tab-errors-clear"),
 };
 
 async function ask(type, payload = {}) {
@@ -312,4 +318,172 @@ els.bt_save.addEventListener("click", async () => {
   say("Buildertrend settings saved.", "ok");
 });
 
+/* ---- diagnostics ---------------------------------------------------------- */
+
+/**
+ * The reports kept when an owned tab was closed on an error.
+ *
+ * Read here rather than in the popup because they carry screenshots. Opening
+ * this page is what counts as having looked, which is what clears the line in
+ * the popup.
+ */
+let tab_reports = [];
+
+async function render_tab_errors() {
+  const answer = await ask("TAB_ERRORS");
+
+  tab_reports = Array.isArray(answer.reports) ? answer.reports : [];
+
+  els.tab_errors_list.replaceChildren(...tab_reports.map(report_item));
+  els.tab_errors_empty.hidden = tab_reports.length > 0;
+  els.tab_errors_copy.disabled = tab_reports.length === 0;
+  els.tab_errors_download.disabled = tab_reports.length === 0;
+
+  await ask("TAB_ERRORS_SEEN");
+}
+
+function report_item(report) {
+  const item = document.createElement("li");
+  item.className = "report";
+
+  const head = document.createElement("p");
+  head.className = "report__head";
+  head.textContent = [
+    new Date(report.at).toLocaleString(),
+    report.owner,
+    report.number ? `WO ${report.number}` : "",
+  ].filter(Boolean).join(" · ");
+
+  const error = document.createElement("p");
+  error.className = "report__error";
+  error.textContent = report.error || "(no error text)";
+
+  item.append(head, error);
+
+  if (report.screenshot) {
+    const shot = document.createElement("img");
+    shot.className = "report__shot";
+    shot.src = report.screenshot;
+    shot.alt = `The tab when ${report.number || "the run"} failed`;
+    shot.title = "Open full size";
+    shot.addEventListener("click", () => open_blob(report.screenshot));
+    item.append(shot);
+  }
+
+  const facts = document.createElement("dl");
+  facts.className = "facts";
+
+  for (const [label, value] of report_facts(report)) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+
+    facts.append(term, detail);
+  }
+
+  item.append(facts);
+
+  if (report.snapshot) {
+    const actions = document.createElement("p");
+    actions.className = "card__actions";
+
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className = "btn btn--quiet";
+    download.textContent = "Download page copy";
+    download.addEventListener("click", () =>
+      save(`tab-error-${report.id}.html`, report.snapshot, "text/html"));
+
+    actions.append(download);
+    item.append(actions);
+  }
+
+  return item;
+}
+
+/** Label/value pairs, shared by the card and by Copy as text. */
+function report_facts(report) {
+  return [
+    ["Doing", report.label],
+    ["Step", report.step],
+    ["State", report.state],
+    ["Run", report.run],
+    ["Page", report.url],
+    ["Title", report.title],
+    ["Closed by", report.tab_closed_by_person ? "a person, while it ran" : ""],
+    ["Screenshot", report.screenshot ? "kept" : report.screenshot_note],
+    ["Page copy", report.snapshot ? `kept (${Math.round(report.snapshot.length / 1024)} KB)` : report.snapshot_note],
+    ["Detail", report.detail ? JSON.stringify(report.detail) : ""],
+    ["Version", report.extension_version],
+  ].filter(([, value]) => value);
+}
+
+function reports_as_text() {
+  return tab_reports
+    .map((report) =>
+      [
+        `${new Date(report.at).toISOString()}  ${report.owner}${report.number ? `  WO ${report.number}` : ""}`,
+        `error      : ${report.error || "(none)"}`,
+        ...report_facts(report).map(([label, value]) => `${label.toLowerCase().padEnd(11)}: ${value}`),
+      ].join("\n"))
+    .join("\n\n");
+}
+
+/** A data: URL cannot be opened as a tab, so it goes through a blob. */
+async function open_blob(data_url) {
+  const blob = await (await fetch(data_url)).blob();
+
+  window.open(URL.createObjectURL(blob), "_blank");
+}
+
+function save(filename, content, type) {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([content], { type }));
+  link.download = filename;
+  link.click();
+
+  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+}
+
+els.tab_errors_copy.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(reports_as_text());
+    say("Tab-error reports copied, without screenshots or page copies.", "ok");
+  } catch {
+    say("Could not copy to the clipboard.", "error");
+  }
+});
+
+els.tab_errors_download.addEventListener("click", () => {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+
+  save(`nss-tab-errors-${stamp}.json`, JSON.stringify(tab_reports, null, 2), "application/json");
+});
+
+/* Two presses, because this deletes the only copy of what those tabs showed. */
+let clear_armed = null;
+
+els.tab_errors_clear.addEventListener("click", async () => {
+  if (clear_armed === null) {
+    els.tab_errors_clear.textContent = "Press again to clear them all";
+    clear_armed = setTimeout(() => {
+      clear_armed = null;
+      els.tab_errors_clear.textContent = "Clear";
+    }, 4000);
+
+    return;
+  }
+
+  clearTimeout(clear_armed);
+  clear_armed = null;
+  els.tab_errors_clear.textContent = "Clear";
+
+  await ask("CLEAR_TAB_ERRORS");
+  await render_tab_errors();
+  say("Tab-error reports cleared.", "ok");
+});
+
 render();
+render_tab_errors();

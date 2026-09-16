@@ -43,6 +43,7 @@
 import { check_signed_in, show_sign_in } from "./portals.js";
 import { scope as current_scope } from "./auth.js";
 import { marked, scope_admits, SAMPLE_TITLE_PREFIX } from "./scope.js";
+import { close_owned_tab, hand_over, lock, open_owned_tab } from "./owned_tabs.js";
 
 const ADD_JOB_URL = "https://buildertrend.net/app/JobPage/0/1?openCondensed=true";
 const ADD_JOB_PATH = "/app/JobPage/0/";
@@ -119,12 +120,16 @@ export async function fill_job(work_order, config, reuse_tab_id = null) {
      because every job created its own and nothing ever closed them. Navigating
      the one tab back to the new-job page is also what re-injects the content
      script, since it is only declared for /JobPage/0/*. */
+  /* Locked from the moment it opens: see background/owned_tabs.js. */
+  const label = `Creating the Buildertrend job for work order ${job.number || ""}`.trim();
+
   const tab = reuse_tab_id === null
-    ? await chrome.tabs.create({ url: ADD_JOB_URL, active: false })
+    ? await open_owned_tab("buildertrend", ADD_JOB_URL, { active: false, label })
     : await navigate_to_new_job(reuse_tab_id);
 
   if (!tab?.id) return { ok: false, error: "Could not open a Buildertrend tab." };
 
+  lock(tab.id, label);
   reported_tabs.delete(tab.id);
 
   await wait_for_load(tab.id);
@@ -132,6 +137,8 @@ export async function fill_job(work_order, config, reuse_tab_id = null) {
   const portal = await check_signed_in("buildertrend", tab.id);
 
   if (portal.state === "signed_out") {
+    /* Hers now: unlocked, and not closed or reused by anything after this. */
+    await hand_over(tab.id);
     await show_sign_in(tab.id);
 
     return {
@@ -139,6 +146,34 @@ export async function fill_job(work_order, config, reuse_tab_id = null) {
       error: "You are signed out of Buildertrend. Sign in on the tab just opened, then try again.",
     };
   }
+
+  const outcome = await drive(tab.id, job, config);
+
+  if (outcome.ok === true) return { ...outcome, tab_id: tab.id };
+
+  /* Anything short of a linked job closes the tab, with a report of what it
+     showed. That includes a job that saved but could not be identified: the
+     job is fine, but the tab is the only evidence of why the lookup missed,
+     and the run carries on in a fresh tab either way. */
+  await close_owned_tab(tab.id, {
+    owner: "buildertrend",
+    label,
+    number: job.number || "",
+    state: outcome.created === true ? "unidentified" : "failed",
+    step: outcome.detail?.stage || "",
+    error: outcome.error || "",
+    detail: outcome.detail || null,
+    run: "manual",
+  });
+
+  const { tab_id: _closed, ...rest } = outcome;
+
+  return rest;
+}
+
+/** Everything after the tab is open and signed in, as one outcome. */
+async function drive(tab_id, job, config) {
+  const tab = { id: tab_id };
 
   /* `unknown` goes on. It is the answer for a slow page as much as an
      unrecognised one, and report_not_ready() below already words every way
@@ -609,8 +644,9 @@ export async function run_queue(work_orders, config, record) {
 
     const outcome = await fill_job(work_order, config, tab_id);
 
-    /* Whatever happened, the tab it used is the tab the next one should use. */
-    if (outcome.tab_id) tab_id = outcome.tab_id;
+    /* A job that went wrong closed its tab, so the next one opens a fresh tab;
+       a job that went right leaves its tab for the next to reuse. */
+    tab_id = outcome.tab_id || null;
 
     /* Created covers both "linked" and "saved but unidentified": Buildertrend
        holds a job either way, and the difference is only whether we know where
@@ -643,6 +679,9 @@ export async function run_queue(work_orders, config, record) {
     }
   }
 
+  /* Closed however the run ended. A stopped run closed its failing tab already. */
+  await close_owned_tab(tab_id);
+
   return summary;
 }
 
@@ -667,7 +706,8 @@ export async function find_existing_job(number, title) {
       error: `Nothing is known about what ${number} is called in Buildertrend, so it cannot be found.`,
     };
 
-  const tab = await chrome.tabs.create({ url: LANDING_URL, active: true }).catch(() => null);
+  const label = `Looking up work order ${number} in Buildertrend`;
+  const tab = await open_owned_tab("buildertrend", LANDING_URL, { active: true, label });
 
   if (!tab?.id) return { ok: false, error: "Could not open a Buildertrend tab." };
 
@@ -675,19 +715,36 @@ export async function find_existing_job(number, title) {
 
   const portal = await check_signed_in("buildertrend", tab.id);
 
-  if (portal.state === "signed_out")
+  if (portal.state === "signed_out") {
+    await hand_over(tab.id);
+
     return {
       ok: false,
       error: "You are signed out of Buildertrend. Sign in on the tab just opened, then try again.",
     };
+  }
 
   const outcome = await read_saved_job(tab.id, { title: wanted, number: String(number) });
 
-  if (!outcome.ok) return { ok: false, error: outcome.error, detail: outcome.detail };
+  /* Closed either way. A lookup that missed used to leave its tab open as the
+     evidence; the report is the evidence now, and it is written first. */
+  await close_owned_tab(
+    tab.id,
+    outcome.ok
+      ? null
+      : {
+          owner: "buildertrend",
+          label,
+          number: String(number),
+          state: "failed",
+          step: "find_job",
+          error: outcome.error || "",
+          detail: outcome.detail || null,
+          run: "manual",
+        },
+  );
 
-  /* Only on success. A tab that could not answer is the tab somebody needs to
-     look at, and closing it would take the evidence away with it. */
-  await chrome.tabs.remove(tab.id).catch(() => null);
+  if (!outcome.ok) return { ok: false, error: outcome.error, detail: outcome.detail };
 
   return { ok: true, url: outcome.url };
 }

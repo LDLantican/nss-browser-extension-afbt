@@ -194,6 +194,30 @@
           <button class="btn" type="button" id="bt-save">Save Buildertrend settings</button>
         </p>
       </section>
+
+      <section class="card" id="diagnostics">
+        <h2>4 · Diagnostics</h2>
+
+        <p class="field__hint field__hint--lead">
+          Every tab this extension opens is closed when something goes wrong in
+          it, so what the tab showed is kept here instead: where it was, what it
+          was doing, the error, a copy of the page, and a screenshot when the
+          tab was on screen at the time. Nothing that signs anybody in is kept
+          &mdash; hidden fields, passwords and tokens are stripped from the
+          copy. Only the last 50 are kept, and only the newest 10 keep their
+          screenshot and page copy.
+        </p>
+
+        <p class="card__actions">
+          <button class="btn btn--quiet" type="button" id="tab-errors-copy">Copy as text</button>
+          <button class="btn btn--quiet" type="button" id="tab-errors-download">Download JSON</button>
+          <button class="link link--danger" type="button" id="tab-errors-clear">Clear</button>
+        </p>
+
+        <p class="field__hint" id="tab-errors-empty" hidden>No tab errors recorded.</p>
+
+        <ol class="reports" id="tab-errors-list"></ol>
+      </section>
     </div>
 
     <script type="module" src="options.js"></script>

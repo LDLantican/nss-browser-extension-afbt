@@ -50,27 +50,25 @@
       bt_client_row_id: "39778241",
     },
 
+    // Nothing here dims the page or blocks clicks any more. That was
+    // `allowClicks`, which set pointer-events on <body> and let every keystroke
+    // through; content/tab_guard.js now locks the tabs the extension opened,
+    // and only those, from document_start.
     init: async function () {
-      this.allowClicks(false);
+      const state = await this.pageState();
 
-      try {
-        const state = await this.pageState();
-
-        if (state === "ready") {
-          this.sendMessage("ADD_JOB_PAGE_READY");
-          return;
-        }
-
-        // Two messages on purpose. The problem signal lets the service worker
-        // stop waiting immediately; the text is what a person needs to read.
-        this.sendMessage("ADD_JOB_PAGE_PROBLEM", state);
-        this.sendCriticalErrorMessage(
-          this.page_state_messages[state] ||
-            this.page_state_messages.unconfirmed,
-        );
-      } finally {
-        this.allowClicks(true);
+      if (state === "ready") {
+        this.sendMessage("ADD_JOB_PAGE_READY");
+        return;
       }
+
+      // Two messages on purpose. The problem signal lets the service worker
+      // stop waiting immediately; the text is what a person needs to read.
+      this.sendMessage("ADD_JOB_PAGE_PROBLEM", state);
+      this.sendCriticalErrorMessage(
+        this.page_state_messages[state] ||
+          this.page_state_messages.unconfirmed,
+      );
     },
 
     // Memoized so a status request from the background reuses the verdict
@@ -178,7 +176,6 @@
         return false;
       } finally {
         this.current_fill_request = null;
-        this.allowClicks(true);
       }
     },
 
@@ -206,8 +203,6 @@
       const jobGroup = this.config.job_group;
       const jobClient = this.config.bt_client_name;
       const jobClientRowId = this.config.bt_client_row_id;
-
-      this.allowClicks(false);
 
       /**
        * The Quickbooks widget wait, currently vestigial.
@@ -603,12 +598,6 @@
           resolve(null);
         }, timeout);
       });
-    },
-
-    allowClicks: function (bool) {
-      if (typeof bool !== "boolean") throw new Error("Invalid boolean.");
-
-      document.body.setAttribute("data-nss-processing", !bool);
     },
 
     // This used to write `input.value += char` directly, which bypasses React's
