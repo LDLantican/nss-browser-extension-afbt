@@ -275,3 +275,68 @@ export async function show_sign_in(tab_id) {
   await chrome.tabs.update(tab_id, { active: true }).catch(() => null);
   await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
 }
+
+/* ---- one sign-in tab per portal, however many runs find it signed out ---- */
+
+const SIGN_IN_TABS_KEY = "nss_sign_in_tabs";
+
+/**
+ * The sign-in tab a run already put in front of somebody, if it is still one.
+ *
+ * Both drainers run on a one-minute timer now, and a signed-out portal is the
+ * normal state of an office PC after a weekend. Each run used to hand its tab
+ * over and focus it, and the next minute's run — holding no memory of that —
+ * opened another and focused that too: a tab and a stolen window a minute, for
+ * as long as nobody was at the desk.
+ *
+ * So the handed-over tab is remembered, and this answers whether it still
+ * stands for "nobody has signed in yet". It does only while the tab is open
+ * **and still on the identity provider's page** — the moment somebody signs in
+ * the tab leaves that host, and the moment they close it the tab is gone, and
+ * either way the next run goes back to asking the portal itself. The record is
+ * never the verdict; the tab's own address is.
+ *
+ * `chrome.storage.session` because the worker is evicted between alarms, and
+ * not `storage.local` because a browser restart takes the tab with it.
+ */
+export async function waiting_sign_in_tab(site) {
+  let tabs = {};
+
+  try {
+    ({ [SIGN_IN_TABS_KEY]: tabs = {} } = await chrome.storage.session.get(SIGN_IN_TABS_KEY));
+  } catch {
+    return null;
+  }
+
+  const tab_id = tabs?.[site];
+  if (!Number.isInteger(tab_id)) return null;
+
+  const tab = await chrome.tabs.get(tab_id).catch(() => null);
+
+  if (tab && classify_url(site, tab.url || tab.pendingUrl || "") === "sign_in") return tab_id;
+
+  await forget_sign_in_tab(site);
+
+  return null;
+}
+
+export async function remember_sign_in_tab(site, tab_id) {
+  if (!Number.isInteger(tab_id)) return;
+
+  try {
+    const { [SIGN_IN_TABS_KEY]: tabs = {} } = await chrome.storage.session.get(SIGN_IN_TABS_KEY);
+
+    await chrome.storage.session.set({ [SIGN_IN_TABS_KEY]: { ...tabs, [site]: tab_id } });
+  } catch {
+    /* Losing this costs one extra sign-in tab, not a wrong answer. */
+  }
+}
+
+async function forget_sign_in_tab(site) {
+  try {
+    const { [SIGN_IN_TABS_KEY]: tabs = {} } = await chrome.storage.session.get(SIGN_IN_TABS_KEY);
+
+    delete tabs[site];
+    await chrome.storage.session.set({ [SIGN_IN_TABS_KEY]: tabs });
+  } catch {}
+}

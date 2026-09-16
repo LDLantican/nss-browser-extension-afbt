@@ -845,14 +845,15 @@ function render_bt(state) {
 
   els.bt_actions.innerHTML = "";
 
-  /* Asked for rather than scheduled. The job is selected by API and the lines
-     are posted by API, so the tab stays hidden for the whole run and nothing
-     takes anybody's focus — the picker fallback that used to bring one forward
-     is gone. It is still a button rather than an alarm because an estimate is a
-     real write into somebody else's system, and a person choosing the moment is
-     worth more than a minute's latency. */
+  /* A "now", not the only way estimates get written. The same run happens on
+     the delivery alarm after every invoice run, unless Settings says this
+     browser should not (`bt_auto_estimates`). It was a button only, on the
+     argument that a person should choose the moment of a write into somebody
+     else's system — but Approve *is* that choice, the invoice into AppFolio,
+     which is money, has never waited for a button, and a manager was never
+     meant to have to open this popup after approving. */
   els.bt_actions.appendChild(
-    button("Write Buildertrend estimates", "btn btn--quiet", async (event) => {
+    button("Write Buildertrend estimates now", "btn btn--quiet", async (event) => {
       const element = event.currentTarget;
       element.disabled = true;
       element.textContent = "Writing…";

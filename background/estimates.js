@@ -51,7 +51,8 @@
  */
 
 import { api } from "./api.js";
-import { check_signed_in, show_sign_in } from "./portals.js";
+import { notify } from "./notify.js";
+import { check_signed_in, remember_sign_in_tab, show_sign_in, waiting_sign_in_tab } from "./portals.js";
 import { SAMPLE_TITLE_PREFIX } from "./scope.js";
 import { settings, save_bt_last_estimate_run } from "./store.js";
 import { close_owned_tab, hand_over, lock, open_owned_tab, owned_tab } from "./owned_tabs.js";
@@ -70,10 +71,25 @@ let estimate_tab_id = null;
 /** What the tab's overlay says and a report names. */
 let current_label = "Writing Buildertrend estimates";
 
+/** Whether somebody pressed the button, for the report and the sign-in tab. */
+let run_kind = "scheduled";
+
+/**
+ * Write whatever approved work is waiting for an estimate.
+ *
+ * Called by the popup's button and by the one-minute alarm the invoice drainer
+ * already runs on. It used to be the button only, because the first version
+ * drove Buildertrend's job picker, which does not render in a hidden tab — so
+ * every run had to bring its tab to the front, and doing that every minute
+ * would have taken over the manager's screen. Nothing here touches the screen
+ * any more (see the top of this file), so a run is as quiet as an invoice run
+ * and Approve is the last thing a manager has to do.
+ */
 export async function deliver_estimates_now({ manual = false } = {}) {
   if (running) return { ok: true, skipped: "already running" };
 
   running = true;
+  run_kind = manual ? "manual" : "scheduled";
   current_label = "Writing Buildertrend estimates";
 
   try {
@@ -93,7 +109,14 @@ export async function deliver_estimates_now({ manual = false } = {}) {
      * it. The durable record is the only account of that run there will ever
      * be. Hence a wrapper rather than eight more `remember()` calls — the
      * ninth exit somebody adds is recorded whether or not they remember to. */
-    return await remember(await attempt_estimates());
+    const outcome = await attempt_estimates();
+
+    /* A timed run that found nothing to do says nothing. It runs every minute,
+       and recording "nothing was waiting" each time would overwrite the report
+       of the run that actually wrote something within a minute of it
+       happening — before anybody could open the popup and read it. A button
+       press is always recorded, because somebody is looking for its answer. */
+    return run_kind === "manual" || worth_recording(outcome) ? await remember(outcome) : outcome;
   } finally {
     running = false;
 
@@ -120,7 +143,7 @@ async function attempt_estimates() {
     const config = await settings();
 
     if (config.buildertrend_enabled === false)
-      return { ok: false, error: "Buildertrend is switched off in Settings.", summary };
+      return { ok: false, error: "Buildertrend is switched off in Settings.", summary, quiet: true };
 
     const response = await api.deliveries(TARGET);
 
@@ -173,6 +196,21 @@ async function attempt_estimates() {
       config,
     };
 
+    const signed_out = {
+      ok: false,
+      error: "buildertrend_signed_out",
+      summary: {
+        ...summary,
+        reason: "You are signed out of Buildertrend. Sign in on the tab just opened, then try again.",
+      },
+    };
+
+    /* A timed run that already left a sign-in tab open waits for it rather
+       than opening another one every minute. A button press still goes and
+       looks, because pressing it is how somebody says "I have signed in". */
+    if (run_kind === "scheduled" && await waiting_sign_in_tab(TARGET) !== null)
+      return { ...signed_out, quiet: true };
+
     const tab = await ensure_tab();
     if (tab === null) return { ok: false, error: "Could not open a Buildertrend tab.", summary };
 
@@ -181,16 +219,20 @@ async function attempt_estimates() {
     if (portal.state === "signed_out") {
       estimate_tab_id = null;
       await hand_over(tab);
-      await show_sign_in(tab);
+      await remember_sign_in_tab(TARGET, tab);
 
-      return {
-        ok: false,
-        error: "buildertrend_signed_out",
-        summary: {
-          ...summary,
-          reason: "You are signed out of Buildertrend. Sign in on the tab just opened, then try again.",
-        },
-      };
+      /* Focused only for somebody who pressed the button and is waiting on
+         it. A timed run leaves the tab where it is and says so once, instead
+         of pulling a window forward over whatever the person is typing. */
+      if (run_kind === "manual") await show_sign_in(tab);
+      else
+        notify(
+          "Buildertrend",
+          "Approved estimates are waiting, and Buildertrend is signed out. Sign in on the Buildertrend tab "
+            + "that was just opened; they will be written within a minute.",
+        );
+
+      return signed_out;
     }
 
     for (const delivery of queue) {
@@ -230,6 +272,26 @@ async function attempt_estimates() {
 
     return { ok: false, error: String(error?.message || error), summary, reports };
   }
+}
+
+/**
+ * Whether a timed run did anything a person should be able to read about.
+ *
+ * `quiet` marks the refusals a timer repeats every minute without anything
+ * having changed — Buildertrend switched off, a sign-in tab already waiting.
+ * Otherwise: a run that failed, or one that touched at least one job.
+ */
+function worth_recording(outcome) {
+  if (outcome.quiet === true) return false;
+  if (outcome.ok !== true) return true;
+
+  const summary = outcome.summary || {};
+
+  /* Not a pause: the web app's /deliveries already says the breaker tripped,
+     and recording it every minute would overwrite the report of the failures
+     that tripped it, which is the one thing worth reading. */
+  return (outcome.reports || []).length > 0
+    || ["delivered", "failed", "unconfirmed", "blocked", "rehearsed"].some((key) => (summary[key] || 0) > 0);
 }
 
 /**
@@ -681,7 +743,7 @@ async function close_tab(failure = null) {
 
   await close_owned_tab(
     id,
-    failure === null ? null : { owner: "estimates", label: current_label, run: "manual", ...failure },
+    failure === null ? null : { owner: "estimates", label: current_label, run: run_kind, ...failure },
   );
 }
 

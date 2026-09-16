@@ -37,13 +37,15 @@
  * retried into a second invoice. A run that dies merely holding a claim goes
  * straight back in the queue, because nothing was sent.
  *
- * ## Differences from the Buildertrend orchestration next door
+ * ## A background tab, reused
  *
- * That one brings its tab forward, because Buildertrend's job picker does not
- * render in a hidden tab. This runs in a **background** tab and reuses one tab
- * for the whole run: a queue of forty jobs that steals focus forty times is
- * unusable, and the manager is meant to be doing something else while it
- * drains.
+ * This runs in a **background** tab and reuses one tab for the whole run: a
+ * queue of forty jobs that steals focus forty times is unusable, and the
+ * manager is meant to be doing something else while it drains. The estimate
+ * writer in background/estimates.js works the same way and runs on the same
+ * alarm, straight after this — see scheduled_delivery() in service_worker.js.
+ * (The Buildertrend *job* filler in buildertrend.js is the one that still
+ * brings its tab forward.)
  *
  * ## The tab is locked, and closed when anything goes wrong
  *
@@ -59,7 +61,8 @@
  */
 
 import { api, fetch_photo, NetworkError } from "./api.js";
-import { check_signed_in, show_sign_in } from "./portals.js";
+import { notify } from "./notify.js";
+import { check_signed_in, remember_sign_in_tab, show_sign_in, waiting_sign_in_tab } from "./portals.js";
 import { scope_admits } from "./scope.js";
 import {
   closed_by_person,
@@ -334,6 +337,15 @@ export async function deliver_now({ manual = false } = {}) {
        * delivered something, which is proof enough of a session. */
       if (!preflighted) {
         preflighted = true;
+
+        /* A timed run that already left a sign-in tab open waits for it. This
+           runs every minute, and each run used to open and focus a fresh
+           sign-in tab of its own — see waiting_sign_in_tab() in portals.js. */
+        if (run_kind === "scheduled" && await waiting_sign_in_tab("appfolio") !== null) {
+          summary.reason = "Nobody is signed in to the AppFolio vendor portal.";
+
+          return { ok: false, error: "vendor_signed_out", summary };
+        }
 
         const portal = await preflight_vendor(queue[0]);
 
@@ -1078,7 +1090,14 @@ async function close_delivery_tab(failure = null) {
   );
 }
 
-/** A sign-in page in front of her, unlocked and no longer this run's. */
+/**
+ * A sign-in page, unlocked and no longer this run's.
+ *
+ * Put in front of somebody only when they pressed the button. A timed run
+ * leaves it where it is and says so once: it fires every minute whether or not
+ * anybody is at the desk, and pulling a window forward over whatever a person
+ * is typing is not a thing a timer gets to do.
+ */
 async function hand_over_delivery_tab() {
   const id = delivery_tab_id;
   delivery_tab_id = null;
@@ -1086,7 +1105,19 @@ async function hand_over_delivery_tab() {
   if (id === null) return;
 
   await hand_over(id);
-  await show_sign_in(id);
+  await remember_sign_in_tab("appfolio", id);
+
+  if (run_kind === "manual") {
+    await show_sign_in(id);
+
+    return;
+  }
+
+  notify(
+    "AppFolio",
+    "Approved invoices are waiting, and the AppFolio vendor portal is signed out. Sign in on the tab that "
+      + "was just opened; they will be delivered within a minute.",
+  );
 }
 
 /**

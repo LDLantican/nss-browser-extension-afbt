@@ -201,6 +201,18 @@ you instead — unlocked, brought forward, and left alone from then on:
 - a **filled invoice waiting for Submit Invoice**, when automatic submitting is
   off.
 
+A sign-in page is only brought forward when you pressed a button. Invoices and
+estimates are also delivered **every minute by themselves** — the web app's
+Approve is the last thing a manager has to do — and a timed run that finds you
+signed out leaves its sign-in tab in the background, shows one notification,
+and waits for that tab rather than opening another every minute. Sign in on it
+and the next minute's run carries on.
+
+So **one browser has to stay open, with this extension signed in to the web app
+and to AppFolio's vendor portal and Buildertrend.** Any number can be — two
+browsers never deliver the same job twice — and a laptop that should not write
+estimates by itself can say so in **Settings → 3 · Buildertrend**.
+
 ### Diagnostics
 
 Closing a tab on an error takes away the page that showed what went wrong, so a

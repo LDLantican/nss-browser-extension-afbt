@@ -499,14 +499,13 @@ const handlers = {
   },
 
   /**
-   * Write the approved work waiting for a Buildertrend estimate.
+   * Write the approved work waiting for a Buildertrend estimate, now.
    *
-   * Deliberately its own command rather than part of DELIVER_NOW. The invoice
-   * drain runs unattended every minute in a background tab; this one has to
-   * bring a tab to the front to choose a job, because Buildertrend's estimate
-   * screen acts on the selected job and its picker does not render in a hidden
-   * tab. Stealing focus every minute is not something to do to somebody who is
-   * working, so this is asked for rather than scheduled.
+   * The popup's "run now". The same run also happens by itself on the delivery
+   * alarm below, straight after the invoice run. It used to be asked for
+   * rather than scheduled, because driving Buildertrend's job picker needed a
+   * tab brought to the front; the estimate leg calls Buildertrend's own API
+   * now, never takes focus, and so has no reason to wait for a button.
    */
   async DELIVER_ESTIMATES() {
     return deliver_estimates_now({ manual: true });
@@ -890,7 +889,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
        so on the web app's own /deliveries screen — which is where somebody
        looking for it will look. A notification per empty minute would be
        noise that teaches people to ignore notifications. */
-    deliver_now();
+    scheduled_delivery();
 
     return;
   }
@@ -899,6 +898,39 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
   sync.trigger();
 });
+
+/**
+ * One timed pass: invoices, then estimates.
+ *
+ * In sequence rather than side by side, so a minute never has a vendor portal
+ * tab and a Buildertrend tab working at once. And the whole pass is the unit
+ * of "already running", not each half: a forty-job invoice drain outlasts
+ * several alarms, and without this every one of them would find the invoice
+ * run busy, skip it, and start an estimate run beside it.
+ *
+ * Module state, so an evicted worker forgets it — which is harmless, because
+ * the worker is only evicted when nothing is running.
+ */
+let scheduled_pass = null;
+
+function scheduled_delivery() {
+  if (scheduled_pass !== null) return scheduled_pass;
+
+  scheduled_pass = (async () => {
+    await deliver_now().catch(() => null);
+
+    /* Read fresh each pass, so switching it off in Settings takes effect on
+       the next minute rather than the next browser start. */
+    const config = await settings();
+
+    if (config.buildertrend_enabled !== false && config.bt_auto_estimates !== false)
+      await deliver_estimates_now().catch(() => null);
+  })().finally(() => {
+    scheduled_pass = null;
+  });
+
+  return scheduled_pass;
+}
 
 /**
  * On install and on every browser start.

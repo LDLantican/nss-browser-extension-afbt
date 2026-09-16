@@ -29,6 +29,13 @@ const DEFAULT_SETTINGS = {
   app_url: "",
   buildertrend_enabled: true,
 
+  // Whether approved estimates are written on the delivery timer, or only
+  // when somebody presses the popup's button. On, because the point is that
+  // Approve is the last thing a manager does; off is for a laptop that should
+  // not be the browser doing the writing. Meaningless while the switch above
+  // is off, which stops both.
+  bt_auto_estimates: true,
+
   // The tenant facts the old version baked into the source, including a
   // Buildertrend contact row id that lived inside a CSS selector. None of them
   // are this extension's business to know; they are just what this office

@@ -39,6 +39,7 @@ const els = {
   sign_in: document.getElementById("sign-in"),
 
   bt_enabled: document.getElementById("bt-enabled"),
+  bt_auto_estimates: document.getElementById("bt-auto-estimates"),
   bt_fields: document.getElementById("bt-fields"),
   job_type: document.getElementById("job-type"),
   job_group: document.getElementById("job-group"),
@@ -92,6 +93,7 @@ async function render() {
   els.app_url.value = settings.app_url || "";
 
   els.bt_enabled.checked = settings.buildertrend_enabled !== false;
+  els.bt_auto_estimates.checked = settings.bt_auto_estimates !== false;
   els.job_type.value = settings.job_type || "";
   els.job_group.value = settings.job_group || "";
   els.bt_client_name.value = settings.bt_client_name || "";
@@ -301,6 +303,7 @@ els.bt_save.addEventListener("click", async () => {
   const saved = await ask("SAVE_SETTINGS", {
     patch: {
       buildertrend_enabled: els.bt_enabled.checked,
+      bt_auto_estimates: els.bt_auto_estimates.checked,
       job_type: els.job_type.value.trim(),
       job_group: els.job_group.value.trim(),
       bt_client_name: els.bt_client_name.value.trim(),
