@@ -22,6 +22,28 @@ import { settings, auth } from "./store.js";
 
 const TIMEOUT_MS = 20000;
 
+/**
+ * This build, as the web app checks it.
+ *
+ * Sent on every request, not only the delivery ones, so the header is never
+ * the thing a new endpoint forgets. The web app only *enforces* it on the calls
+ * that take or perform delivery work — every manager's browser drains the same
+ * queue and shares its attempt counts and circuit breaker, so one stale install
+ * would cost everybody. A mismatch answers 426; see is_outdated().
+ */
+export function extension_version() {
+  try {
+    return chrome.runtime.getManifest().version || "";
+  } catch {
+    return "";
+  }
+}
+
+/** The web app refusing this build. Never retried: nothing but an update fixes it. */
+export function is_outdated(response) {
+  return response?.status === 426;
+}
+
 export class NetworkError extends Error {
   constructor(message) {
     super(message);
@@ -81,7 +103,7 @@ function query_string(query) {
  */
 export async function request(method, path, { body, query, token = true } = {}) {
   const base = await base_url();
-  const headers = { Accept: "application/json" };
+  const headers = { Accept: "application/json", "X-Extension-Version": extension_version() };
 
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
@@ -183,7 +205,7 @@ function describe_non_json(status, text) {
 export async function fetch_photo(id) {
   const base = await base_url();
   const stored = await auth();
-  const headers = { Accept: "image/*" };
+  const headers = { Accept: "image/*", "X-Extension-Version": extension_version() };
 
   if (stored?.token) headers.Authorization = `Bearer ${stored.token}`;
 
@@ -289,6 +311,14 @@ export const api = {
      happened. */
   release_delivery: (id) =>
     request("POST", `/api/deliveries/${encodeURIComponent(id)}/release`),
+
+  /* Still working on it. Called before each step of a job, so a lease measures
+     silence rather than length: a forty-photo job used to outlast it, get swept
+     and re-claimed by another manager's browser, and have its notes posted
+     twice. 409 means this device no longer holds the job — stop, and report
+     nothing, because it is somebody else's now. */
+  touch_delivery: (id) =>
+    request("POST", `/api/deliveries/${encodeURIComponent(id)}/touch`),
 
   remember_vendor_url: (number, url, target = "appfolio") =>
     request("POST", "/api/deliveries/url", { body: { number, url, target } }),

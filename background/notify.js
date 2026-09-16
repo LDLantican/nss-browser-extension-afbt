@@ -56,3 +56,45 @@ export function set_badge(counts) {
     // Same reasoning as above.
   }
 }
+
+/**
+ * Say once that this build may not deliver.
+ *
+ * The one-minute alarm discards a run's result, so without this an outdated
+ * install would stop delivering in complete silence — every other manager's
+ * browser would carry on, and nobody would know this one had dropped out.
+ * Once per required version per browser session, not every minute: the alarm
+ * repeats the refusal without anything having changed.
+ */
+const OUTDATED_KEY = "nss_outdated_notice";
+
+export async function warn_outdated(body = {}) {
+  const required = String(body?.required_version || "");
+  let seen = null;
+
+  try {
+    ({ [OUTDATED_KEY]: seen } = await chrome.storage.session.get(OUTDATED_KEY));
+  } catch {
+    /* No record means saying it again, which is the harmless direction. */
+  }
+
+  if (seen === required) return;
+
+  try {
+    await chrome.storage.session.set({ [OUTDATED_KEY]: required });
+  } catch {}
+
+  notify("Extension update needed", outdated_reason(body));
+}
+
+/** The sentence a person reads, naming both versions when the web app sent them. */
+export function outdated_reason(body = {}) {
+  const required = body?.required_version;
+  const yours = body?.your_version;
+
+  if (!required)
+    return "The web app has no extension version set, so this browser is not sending invoices or estimates.";
+
+  return `This extension is ${yours ? `version ${yours}` : "an unknown version"} and the web app needs ${required}, `
+    + "so this browser is not sending invoices or estimates. Update the extension and reload it.";
+}

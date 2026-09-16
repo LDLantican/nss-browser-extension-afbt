@@ -50,8 +50,8 @@
  * second time.
  */
 
-import { api } from "./api.js";
-import { notify } from "./notify.js";
+import { api, is_outdated } from "./api.js";
+import { notify, outdated_reason, warn_outdated } from "./notify.js";
 import { check_signed_in, remember_sign_in_tab, show_sign_in, waiting_sign_in_tab } from "./portals.js";
 import { SAMPLE_TITLE_PREFIX } from "./scope.js";
 import { settings, save_bt_last_estimate_run } from "./store.js";
@@ -73,6 +73,19 @@ let current_label = "Writing Buildertrend estimates";
 
 /** Whether somebody pressed the button, for the report and the sign-in tab. */
 let run_kind = "scheduled";
+
+/** The web app's 426 body, once a job in this run has been refused for it. */
+let outdated = null;
+
+/**
+ * How often a running job renews its lease.
+ *
+ * Well inside the 300-second `submitting` lease, which is the one that
+ * matters here: an estimate is written line by line *after* that transition,
+ * and a long write used to outlast it, be swept to `unconfirmed` mid-flight,
+ * and then have its own success refused.
+ */
+const HEARTBEAT_MS = 60000;
 
 /**
  * Write whatever approved work is waiting for an estimate.
@@ -139,6 +152,14 @@ async function attempt_estimates() {
   };
   const reports = [];
 
+  outdated = null;
+
+  const refuse_outdated = async (body) => {
+    await warn_outdated(body);
+
+    return { ok: false, error: "extension_outdated", summary: { ...summary, reason: outdated_reason(body) }, reports };
+  };
+
   try {
     const config = await settings();
 
@@ -146,6 +167,9 @@ async function attempt_estimates() {
       return { ok: false, error: "Buildertrend is switched off in Settings.", summary, quiet: true };
 
     const response = await api.deliveries(TARGET);
+
+    /* First, before the sign-in check opens a tab. */
+    if (is_outdated(response)) return await refuse_outdated(response.body);
 
     /* Both of these carried a bare token and nothing else, and the popup's
        estimate button prints `summary.reason || result.error` — so a manager
@@ -236,9 +260,28 @@ async function attempt_estimates() {
     }
 
     for (const delivery of queue) {
-      const outcome = await write_one(delivery, options, reports);
+      /* Renewed on a timer rather than at step boundaries, because the long
+         part of this leg is one `ask()` writing every line, and it runs after
+         `submitting`. Every step inside is bounded by STEP_MS, so a hung job
+         still stops renewing and the lease can recover it. The answer is
+         ignored: before `submitting` write_one asks explicitly, and after it
+         the result has to be reported whatever the lease says. */
+      const heartbeat = setInterval(() => {
+        api.touch_delivery(delivery.id).catch(() => null);
+      }, HEARTBEAT_MS);
+
+      let outcome;
+
+      try {
+        outcome = await write_one(delivery, options, reports);
+      } finally {
+        clearInterval(heartbeat);
+      }
 
       summary[outcome] = (summary[outcome] || 0) + 1;
+
+      /* Every job after this one would be refused identically. */
+      if (outcome === "outdated") return await refuse_outdated(outdated);
 
       /* A rehearsal puts the job straight back, so a second one would pick the
          same row up and rehearse it for ever. One pass is the whole run. */
@@ -326,6 +369,13 @@ async function write_one(delivery, options, reports) {
   /* 409 is the ordinary answer when two browsers drain the same queue. */
   if (claim.status === 409) return "skipped";
   if (claim.status === 401) return "signed_out";
+
+  if (is_outdated(claim)) {
+    outdated = claim.body;
+
+    return "outdated";
+  }
+
   if (!claim.ok) return finish(delivery, options, reports, "failed", "That estimate could not be claimed.");
 
   current_label = `Writing the estimate for work order ${delivery.number}`;
@@ -387,7 +437,24 @@ async function write_one(delivery, options, reports) {
      be part-written" instead of one a retry would double. Not for a rehearsal,
      which sends nothing. */
   if (!options.dry_run) {
-    const permitted = await api.submitting_delivery(delivery.id);
+    /* Still ours? Reading the worksheet and switching the screen can be slow,
+       and a job another device now holds is theirs to write and to report. */
+    const touched = await api.touch_delivery(delivery.id);
+
+    if (touched.status === 409) return "skipped";
+
+    const permitted = is_outdated(touched) ? touched : await api.submitting_delivery(delivery.id);
+
+    /* A build refused before anything was posted: put the job back untouched
+       rather than spend an attempt on a refusal about this browser. */
+    if (is_outdated(permitted)) {
+      outdated = permitted.body;
+      await api.release_delivery(delivery.id).catch(() => null);
+
+      return "outdated";
+    }
+
+    if (permitted.status === 409 && permitted.body?.held_elsewhere === true) return "skipped";
 
     if (!permitted.ok)
       return finish(delivery, options, reports, "failed",

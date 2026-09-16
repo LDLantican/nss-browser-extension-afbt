@@ -60,8 +60,8 @@
  * them: a sign-in page, and a filled invoice waiting for Submit Invoice.
  */
 
-import { api, fetch_photo, NetworkError } from "./api.js";
-import { notify } from "./notify.js";
+import { api, fetch_photo, is_outdated, NetworkError } from "./api.js";
+import { notify, outdated_reason, warn_outdated } from "./notify.js";
 import { check_signed_in, remember_sign_in_tab, show_sign_in, waiting_sign_in_tab } from "./portals.js";
 import { scope_admits } from "./scope.js";
 import {
@@ -134,6 +134,18 @@ let awaiting_submit = false;
  * delivery at all.
  */
 let photos_missing = 0;
+
+/**
+ * The web app's refusal of this build, once one has been seen this run.
+ *
+ * Module state because the refusal that matters most arrives through the
+ * page: DELIVERY_ABOUT_TO_SUBMIT is answered by the listener at the bottom of
+ * this file, and the invoice page only hands back a sentence. Remembering the
+ * body here is how deliver_one tells "refused because this build is stale"
+ * — release the job, stop the run — from an ordinary failure that spends an
+ * attempt.
+ */
+let outdated = null;
 
 /**
  * Where the unsubmitted invoice is, across service-worker restarts.
@@ -271,11 +283,23 @@ export async function deliver_now({ manual = false } = {}) {
 
   awaiting_submit = false;
   photos_missing = 0;
+  outdated = null;
+
+  /* A build the web app will not let work, said once and in a sentence. */
+  const refuse_outdated = async (body) => {
+    await warn_outdated(body);
+    summary.reason = outdated_reason(body);
+
+    return { ok: false, error: "extension_outdated", summary };
+  };
 
   try {
     for (let pass = 0; pass < 20; pass++) {
       const response = await api.deliveries("appfolio");
 
+      /* Before anything else, including the sign-in check: that opens a tab,
+         and a build that may not deliver has no business opening one. */
+      if (is_outdated(response)) return await refuse_outdated(response.body);
       if (response.status === 401) return { ok: false, error: "signed_out", summary };
       if (response.status === 403) return { ok: false, error: "not_permitted", summary };
       if (!response.ok)
@@ -377,8 +401,10 @@ export async function deliver_now({ manual = false } = {}) {
         /* Neither is a failure or counted as one. A released portal sign-out
            left the row untouched with its attempt refunded; an expired device
            token never got as far as claiming. Tallying either would report a
-           failure against a job still sitting in the queue. */
-        else if (outcome !== "signed_out" && outcome !== "app_signed_out") summary.failed += 1;
+           failure against a job still sitting in the queue. `outdated` is the
+           same: the job was released, or never claimed. */
+        else if (outcome !== "signed_out" && outcome !== "app_signed_out" && outcome !== "outdated")
+          summary.failed += 1;
 
         /* Assigned per job rather than once at the end, because deliver_now has
            seven return points and every one of them hands back this summary. */
@@ -391,6 +417,11 @@ export async function deliver_now({ manual = false } = {}) {
 
           return { ok: false, error: TAB_CLOSED, summary };
         }
+
+        /* The version moved under a running build. Every job after this one
+           would be refused identically, so the run stops here. Before the
+           rehearsal's early return for the same reason the tab check is. */
+        if (outcome === "outdated") return await refuse_outdated(outdated);
 
         /* A rehearsal puts the job straight back, so a second pass would pick
            the same one up and rehearse it forever. One pass is the whole run. */
@@ -468,9 +499,45 @@ async function deliver_one(delivery, options, reports) {
      with a different fix, and it must not send her to AppFolio to solve
      something that lives in this extension's settings. */
   if (claim.status === 401) return "app_signed_out";
+
+  if (is_outdated(claim)) {
+    outdated = claim.body;
+
+    return "outdated";
+  }
+
   if (!claim.ok) return "failed";
 
   const finish = (state, error = "", extra = {}) => report(delivery, options, reports, state, error, extra);
+
+  /* Before each step that writes, ask whether this device still holds the job.
+   *
+   * `null` means carry on. Anything else is the outcome to return, and none of
+   * them reports a result: a job another device now holds is theirs to report,
+   * and a build refused mid-run puts its job back rather than spending an
+   * attempt on a refusal that had nothing to do with the job.
+   *
+   * Only ever called before `submitting`. After Submit has been pressed the
+   * result has to be reported whatever happened to the lease, so step E does
+   * not ask. */
+  const still_held = async () => {
+    const touched = await api.touch_delivery(delivery.id);
+
+    if (touched.ok) return null;
+    if (touched.status === 409) return "skipped";
+    if (touched.status === 401) return "app_signed_out";
+
+    if (is_outdated(touched)) {
+      outdated = touched.body;
+      await api.release_delivery(delivery.id).catch(() => null);
+
+      return "outdated";
+    }
+
+    /* Anything else is the web app misbehaving, not the job — carry on, and let
+       the lease decide as it always has. */
+    return null;
+  };
 
   current_label = `Delivering work order ${delivery.number}`;
   current_step = "A: locate";
@@ -532,6 +599,12 @@ async function deliver_one(delivery, options, reports) {
 
   /* ---- B: accept, if nobody has ---------------------------------------- */
 
+  /* Finding the job can take a list scan and several page loads, so this is
+     the first point the lease may have lapsed — and everything from here on
+     writes to AppFolio. */
+  const before_accept = await still_held();
+  if (before_accept !== null) return before_accept;
+
   if (located.needs_accepting && !options.dry_run) {
     current_step = "B: accept";
 
@@ -566,6 +639,11 @@ async function deliver_one(delivery, options, reports) {
           ? "Photos of the completed work."
           : `Photos of the completed work (${which} of ${total}).`;
 
+      /* Per batch, because this is the step that made jobs outlast the lease
+         and the step whose duplicates land on the client's work order. */
+      const before_note = await still_held();
+      if (before_note !== null) return before_note;
+
       /* Reloaded per batch rather than reusing the saved form, because what a
          React form does to itself after a successful save is its business and
          a fresh page is one less thing to be wrong about. */
@@ -581,6 +659,9 @@ async function deliver_one(delivery, options, reports) {
   /* ---- D: the invoice --------------------------------------------------- */
 
   current_step = "D: invoice";
+
+  const before_invoice = await still_held();
+  if (before_invoice !== null) return before_invoice;
 
   const invoice = await command(`${url}/invoices`, "VENDOR_SUBMIT_INVOICE", {
     delivery_id: delivery.id,
@@ -599,6 +680,17 @@ async function deliver_one(delivery, options, reports) {
   });
 
   if (invoice?.ok !== true) {
+    /* The page asked to submit and the web app refused this build. Nothing was
+       submitted — the page only presses Submit on a yes — and the row is still
+       `claimed`, so it goes back untouched rather than being reported as a
+       failure that spends an attempt. Checked first, because the page's own
+       sentence for this ("could not be told") reads like any other failure. */
+    if (outdated !== null && invoice?.unconfirmed !== true) {
+      await api.release_delivery(delivery.id).catch(() => null);
+
+      return "outdated";
+    }
+
     /* Three different answers, and the distinction is the whole safety story.
        `blocked` is a refusal nothing should retry; `unconfirmed` means Submit
        was pressed and the outcome is unknown; anything else is a clean failure
@@ -1007,7 +1099,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type === "DELIVERY_ABOUT_TO_SUBMIT") {
     api
       .submitting_delivery(message.payload?.delivery_id)
-      .then((response) => respond({ ok: response.ok, status: response.status }))
+      .then((response) => {
+        /* Kept for deliver_one, which gets only the page's sentence back. */
+        if (is_outdated(response)) outdated = response.body;
+
+        respond({ ok: response.ok, status: response.status });
+      })
       .catch((error) => respond({ ok: false, error: error?.message || "" }));
 
     return true;
