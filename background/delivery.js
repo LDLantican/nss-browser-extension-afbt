@@ -64,6 +64,7 @@ import { api, fetch_photo, is_outdated, NetworkError } from "./api.js";
 import { notify, outdated_reason, warn_outdated } from "./notify.js";
 import { check_signed_in, remember_sign_in_tab, show_sign_in, waiting_sign_in_tab } from "./portals.js";
 import { scope_admits } from "./scope.js";
+import { capture, record_tab_error } from "./tab_errors.js";
 import {
   closed_by_person,
   close_owned_tab,
@@ -728,18 +729,36 @@ async function deliver_one(delivery, options, reports) {
      Progress with a correct invoice on it is untidy — reporting it as failed
      would invite a retry, and the retry would submit the invoice again.
 
-     Not fatal is not the same as not worth knowing, though, and this used to
-     be discarded entirely: the step had no wait and no confirmation, so it
-     probably missed often and nothing anywhere would have said so. The
-     outcome now rides back on the result for the popup to total up. It is
-     deliberately not sent to the server — mark_delivered() nulls last_error,
-     so there is nowhere honest to put it, and inventing a field to carry a
-     non-failure is worse than reporting it where somebody is already looking. */
+     Not fatal is not the same as not worth knowing. This used to ride back to
+     the popup's run summary only, which the next run overwrote, so the first
+     live miss left no trace of why. Now the outcome goes to the server with the
+     `delivered` result (work_order_deliveries.work_done_at / work_done_error,
+     listed on /deliveries), and a miss is recorded in Troubleshooting with what
+     the page showed — the tab is still open here, so its DOM can be had. */
   const done = await command(url, "VENDOR_WORK_DONE", {}).catch(() => null);
+  const work_done = done?.ok === true;
+  const work_done_error = work_done ? "" : done?.error || "The work order page did not answer.";
+
+  if (!work_done && delivery_tab_id !== null) {
+    const seen = await capture(delivery_tab_id).catch(() => ({}));
+
+    await record_tab_error({
+      owner: "delivery",
+      label: current_label,
+      run: run_kind,
+      number: delivery.number,
+      step: current_step,
+      state: "left_open",
+      error: work_done_error,
+      detail: done?.seen ?? null,
+      ...seen,
+    }).catch(() => null);
+  }
 
   return finish("delivered", "", {
     external_ref: invoice.external_ref || "",
-    work_done: done?.ok === true,
+    work_done,
+    work_done_error,
     photos_offered,
     photos_attached,
   });
@@ -1059,14 +1078,21 @@ async function report(delivery, options, reports, state, error, extra = {}) {
     return state === "dry_run" ? "rehearsed" : "failed";
   }
 
-  await api
-    .delivery_result(delivery.id, {
-      state,
-      error,
-      external_ref: extra.external_ref || "",
-      payload_hash: delivery.payload_hash,
-    })
-    .catch(() => null);
+  const result = {
+    state,
+    error,
+    external_ref: extra.external_ref || "",
+    payload_hash: delivery.payload_hash,
+  };
+
+  /* Only when step E actually ran. Left out otherwise, which the server reads
+     as unknown rather than as a job left open. */
+  if (state === "delivered" && typeof extra.work_done === "boolean") {
+    result.work_done = extra.work_done;
+    result.work_done_error = extra.work_done_error || "";
+  }
+
+  await api.delivery_result(delivery.id, result).catch(() => null);
 
   /* A portal sign-out used to arrive here as a `failed` result carrying
      `signed_out: true`. It no longer reaches report() at all — deliver_one
@@ -1081,10 +1107,9 @@ async function report(delivery, options, reports, state, error, extra = {}) {
     photos_missing += Math.max(0, Number(extra.photos_offered ?? 0) - Number(extra.photos_attached ?? 0));
 
   /* `delivered_open` is not a delivery state and never reaches the server —
-     the result was posted as `delivered` just above, which is what it is. It
-     exists only so deliver_now can total the jobs whose Work Done click did
-     not land, since a delivered row's last_error is nulled and the server has
-     nowhere to keep a note about a non-failure. */
+     the result was posted as `delivered` just above, carrying `work_done`. It
+     exists so deliver_now can total the jobs whose Work Done click did not
+     land for the popup's run summary. */
   return state === "delivered" && extra.work_done === false ? "delivered_open" : state;
 }
 

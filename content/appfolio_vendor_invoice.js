@@ -834,7 +834,8 @@
     async work_done() {
       const button = document.querySelector(app.SELECTORS.work_done);
 
-      if (button === null) return { ok: false, error: "Could not find the Work Done button." };
+      if (button === null)
+        return { ok: false, error: "Could not find the Work Done button.", seen: app.work_done_seen() };
 
       const before = app.text(app.SELECTORS.status);
 
@@ -854,8 +855,50 @@
       );
 
       return moved === null
-        ? { ok: false, error: "Work Done was pressed and the work order did not change." }
+        ? {
+            ok: false,
+            error: "Work Done was pressed and the work order did not change.",
+            seen: app.work_done_seen(),
+          }
         : { ok: true };
+    },
+
+    /**
+     * What the work-order page showed when Work Done did not land. Reads only.
+     *
+     * Exists because the first live miss (17 September 2026) left nothing
+     * behind: the job was invoiced and still In Progress, and nobody could say
+     * whether the button was gone, disabled, or had opened something that
+     * wanted a second click. Each of those is a different fix, so each is
+     * recorded — the status badge, every Work Done control on the page, and
+     * any dialog that is open with the words on its buttons.
+     */
+    work_done_seen() {
+      const describe = (element) => ({
+        tag: element.tagName.toLowerCase(),
+        classes: String(element.className || "").slice(0, 200),
+        text: (element.textContent || "").trim().slice(0, 80),
+        disabled: element.disabled === true || element.getAttribute("aria-disabled") === "true",
+        visible: element.getClientRects().length > 0,
+      });
+
+      const labelled = [...document.querySelectorAll("button, a, [role='menuitem']")]
+        .filter((element) => /work\s*done/i.test(element.textContent || ""));
+
+      return {
+        page: app.page_kind(),
+        path: location.pathname,
+        status: app.text(app.SELECTORS.status),
+        done_buttons: [...document.querySelectorAll(`${app.SELECTORS.work_done}, .js-work-done-button`)]
+          .map(describe),
+        labelled_work_done: labelled.slice(0, 5).map(describe),
+        dialogs: [...document.querySelectorAll(".modal.show, [role='dialog'], [role='alertdialog']")]
+          .slice(0, 3)
+          .map((dialog) => ({
+            text: (dialog.textContent || "").trim().replace(/\s+/g, " ").slice(0, 300),
+            buttons: [...dialog.querySelectorAll("button")].map((b) => (b.textContent || "").trim()).slice(0, 6),
+          })),
+      };
     },
 
     /* ---- reading the page ----------------------------------------------- */

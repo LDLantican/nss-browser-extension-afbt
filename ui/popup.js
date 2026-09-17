@@ -214,7 +214,7 @@ async function render() {
     outgoing.unchecked,
   );
   render_attention(state, outgoing.problems, failed, bt_queue, bt_pending);
-  render_recent(state, jobs.filter((job) => job.state === "synced"));
+  render_recent(state, jobs.filter((job) => job.state === "synced"), bt_on);
 
   if (refreshed) return;
 
@@ -379,7 +379,7 @@ function render_attention(state, outgoing, failed, bt_queue, bt_pending) {
     );
 }
 
-function render_recent(state, synced) {
+function render_recent(state, synced, bt_on) {
   els.recent.hidden = synced.length === 0;
   els.recent_summary.textContent = `Recently sent (${synced.length})`;
   els.recent_list.innerHTML = "";
@@ -392,8 +392,87 @@ function render_recent(state, synced) {
     if (job.work_order_id)
       head.appendChild(anchor(`${app_base(state)}/work-orders/${job.work_order_id}`, "Open"));
 
+    const chips = outside_chips(job.server?.outside, bt_on);
+
+    if (chips.length > 0) {
+      const holder = document.createElement("div");
+      holder.className = "job__chips";
+
+      for (const chip of chips) {
+        const pill = document.createElement("span");
+        pill.className = `pill pill--${chip.tone}`;
+        pill.textContent = chip.label;
+        pill.title = chip.title;
+        holder.appendChild(pill);
+      }
+
+      item.appendChild(holder);
+    }
+
     els.recent_list.appendChild(item);
   }
+}
+
+/**
+ * Where one job stands outside the web app: its BuilderTrend job, its AppFolio
+ * invoice, its BuilderTrend estimate.
+ *
+ * Read from the lookup's `outside` block, which the web app computes and the
+ * REFRESH on open keeps current. Nothing here is remembered or inferred: an
+ * older web app that sends no block gets no chips, because a chip that might be
+ * stale is worse than none. Display only — nothing that drains a queue reads it.
+ *
+ * The words carry the state as well as the colour, so the row reads the same
+ * to somebody who cannot tell amber from green.
+ */
+function outside_chips(outside, bt_on) {
+  if (!outside || typeof outside !== "object") return [];
+
+  const chips = [];
+
+  const delivery = (noun, state) => {
+    const words = {
+      delivered: ["synced", `${noun} sent`, `The ${noun.toLowerCase()} is in.`],
+      pending: ["queued", `${noun} queued`, `The ${noun.toLowerCase()} is waiting to go out.`],
+      claimed: ["queued", `${noun} sending`, `The ${noun.toLowerCase()} is being written now.`],
+      submitting: ["queued", `${noun} sending`, `The ${noun.toLowerCase()} is being written now.`],
+      failed: ["blocked", `${noun} failed`, "It will be tried again. Deliveries in the web app says why."],
+      blocked: ["blocked", `${noun} held`, "Held back for a person. Deliveries in the web app says why."],
+      unconfirmed: ["rejected", `${noun} unsure`, "It may already be there. Check before retrying, on Deliveries."],
+    }[state];
+
+    return words ? { tone: words[0], label: words[1], title: words[2] } : null;
+  };
+
+  if (bt_on && outside.buildertrend_job)
+    chips.push(
+      outside.buildertrend_job.state === "done"
+        ? { tone: "synced", label: "BT job", title: "The job exists in BuilderTrend." }
+        : { tone: "none", label: "No BT job", title: "Not in BuilderTrend yet." },
+    );
+
+  const invoice = outside.appfolio_invoice;
+  const invoice_chip = invoice ? delivery("Invoice", invoice.state) : null;
+
+  if (invoice_chip) {
+    /* Invoiced, and Work Done did not land. Not a money problem, so amber rather
+       than red, and never shown for `null` — that is a delivery nobody reported
+       on, not one known to be open. */
+    if (invoice.state === "delivered" && invoice.work_done === false)
+      chips.push({
+        tone: "blocked",
+        label: "Invoice · open",
+        title: "Invoiced, but Work Done was not pressed in AppFolio. Deliveries in the web app lists it.",
+      });
+    else chips.push(invoice_chip);
+  }
+
+  if (bt_on && outside.buildertrend_estimate) {
+    const estimate_chip = delivery("Estimate", outside.buildertrend_estimate.state);
+    if (estimate_chip) chips.push(estimate_chip);
+  }
+
+  return chips;
 }
 
 /** A row's skeleton: number, a pill, and room for a line or two under it. */

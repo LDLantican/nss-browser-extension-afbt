@@ -269,6 +269,14 @@ button:disabled {
   color: var(--warn);
 }
 
+/* Something that has not happened yet and is not a problem — no BuilderTrend
+   job so far. Quieter than queued, which means work is on its way. */
+.pill--none {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink-faint);
+}
+
 .pill--rejected {
   background: var(--bad-soft);
   border-color: #fca5a5;

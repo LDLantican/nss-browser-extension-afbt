@@ -231,6 +231,16 @@ main[hidden] {
   font-size: 11px;
 }
 
+/* Where the job stands outside the web app: BT job, invoice, estimate. Under
+   the head rather than in it, because three pills beside a number and an Open
+   link wrap unpredictably at popup width. */
+.job__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
 .job__where {
   font-size: 12px;
   color: var(--ink-soft);
