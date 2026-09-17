@@ -313,6 +313,11 @@ export async function deliver_now({ manual = false } = {}) {
       }
 
       const queue = Array.isArray(response.body?.deliveries) ? response.body.deliveries : [];
+
+      /* What the popup reports as waiting when this run stops short — the first
+         pass's count, because a refusal below leaves every one of them queued. */
+      if (pass === 0) summary.waiting = queue.length;
+
       if (queue.length === 0) return { ok: true, summary, reports };
 
       /* No scope, no run — before the first claim, so nothing spends an attempt

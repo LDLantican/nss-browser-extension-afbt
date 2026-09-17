@@ -123,9 +123,11 @@ export async function fill_job(work_order, config, reuse_tab_id = null) {
   /* Locked from the moment it opens: see background/owned_tabs.js. */
   const label = `Creating the Buildertrend job for work order ${job.number || ""}`.trim();
 
+  /* Opened on Landing, not the new-job page: the job is looked for before one
+     is created. See look_before_creating(). */
   const tab = reuse_tab_id === null
-    ? await open_owned_tab("buildertrend", ADD_JOB_URL, { active: false, label })
-    : await navigate_to_new_job(reuse_tab_id);
+    ? await open_owned_tab("buildertrend", LANDING_URL, { active: false, label })
+    : await navigate_tab(reuse_tab_id, LANDING_URL);
 
   if (!tab?.id) return { ok: false, error: "Could not open a Buildertrend tab." };
 
@@ -146,6 +148,40 @@ export async function fill_job(work_order, config, reuse_tab_id = null) {
       error: "You are signed out of Buildertrend. Sign in on the tab just opened, then try again.",
     };
   }
+
+  const title = expected_title(job);
+  const existing = await look_before_creating(tab.id, { title, number: job.number });
+
+  if (existing.ok === true)
+    return { ok: true, created: true, existing: true, tab_id: tab.id, url: existing.url, title };
+
+  if (existing.absent !== true) {
+    const refusal = {
+      ok: false,
+      created: false,
+      error:
+        existing.error
+          ? `Nothing was created in Buildertrend. ${existing.error}`
+          : "Buildertrend's job list could not be checked, so nothing was created.",
+      detail: { ...(existing.detail || {}), stage: "find_before_create" },
+    };
+
+    await close_owned_tab(tab.id, {
+      owner: "buildertrend",
+      label,
+      number: job.number || "",
+      state: "failed",
+      step: "find_before_create",
+      error: refusal.error,
+      detail: refusal.detail,
+      run: "manual",
+    });
+
+    return refusal;
+  }
+
+  if (!(await navigate_tab(tab.id, ADD_JOB_URL)))
+    return { ok: false, error: "The Buildertrend tab was closed before the job was created." };
 
   const outcome = await drive(tab.id, job, config);
 
@@ -321,7 +357,25 @@ function watch_for_saved_job(tab_id, wanted, timeout = SAVE_BUDGET_MS) {
  * leaves the link visibly missing rather than quietly wrong. That trade is
  * taken knowingly, and the message says to go and look before re-running.
  */
-async function read_saved_job(tab_id, wanted) {
+/**
+ * Whether Buildertrend already has this job, asked before creating one.
+ *
+ * The queue and the one-run-at-a-time guard stop this extension from creating
+ * a job twice while it remembers doing so. This covers what they cannot: a
+ * worker evicted mid-run, a job somebody made by hand, a link that was lost.
+ * Only a definite answer from the page lets a job be created — `absent: true`,
+ * meaning the list painted, filtered and showed no match. A duplicate, a list
+ * that never loaded or a page that never answered all refuse.
+ */
+async function look_before_creating(tab_id, wanted) {
+  const answer = await read_saved_job(tab_id, wanted, { attempts: 3, stop_on_absent: true });
+
+  if (answer.ok === true) return { ok: true, url: answer.url };
+
+  return { ok: false, absent: answer.absent === true, error: answer.error, detail: answer.detail };
+}
+
+async function read_saved_job(tab_id, wanted, { attempts = 12, stop_on_absent = false } = {}) {
   /* Buildertrend is a single-page app, and the redirect to Landing is a
      same-document navigation. `chrome.tabs.onUpdated` reports those — which is
      why the save is detected at all — but **Chrome does not inject content
@@ -371,7 +425,7 @@ async function read_saved_job(tab_id, wanted) {
   await chrome.tabs.update(tab_id, { url: LANDING_URL }).catch(() => null);
   await wait_for_load(tab_id);
 
-  for (let attempt = 0; attempt < 12; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     attempts_used = attempt + 1;
 
     /* The picker is a virtualised list over ~900 jobs, and Chrome does not
@@ -420,6 +474,17 @@ async function read_saved_job(tab_id, wanted) {
 
       if (answer?.ok === true)
         return { ok: true, created: true, tab_id, url: answer.url, title: wanted?.title || "" };
+
+      /* Before creating, a definite miss or a duplicate is the answer and
+         asking again changes nothing. After a save, a miss is only a list that
+         has not caught up, so it keeps asking as it always did. */
+      if (stop_on_absent && (answer?.absent === true || answer?.duplicate === true))
+        return {
+          ok: false,
+          absent: answer.absent === true,
+          error: answer.error || "",
+          detail: { stage: "find_job", answered: true, reloaded, attempts: attempts_used, ...(answer.detail || {}) },
+        };
 
       /* A page showing the wrong job keeps saying so, and a page still
          rendering says the same thing — so this keeps asking rather than
@@ -566,10 +631,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
  * `complete` event and this would sit out its whole fifty-second timeout before
  * carrying on to succeed anyway.
  */
-/** Point an existing tab back at the blank new-job page and wait for it. */
-async function navigate_to_new_job(tab_id) {
+/** Point an existing tab at `url` and wait for it to load. */
+async function navigate_tab(tab_id, url) {
   try {
-    const tab = await chrome.tabs.update(tab_id, { url: ADD_JOB_URL, active: false });
+    const tab = await chrome.tabs.update(tab_id, { url });
 
     if (!tab?.id) return null;
 
@@ -629,6 +694,8 @@ async function wait_for_load(tab_id, timeout = HANDSHAKE_MS) {
 export async function run_queue(work_orders, config, record) {
   const summary = {
     created: 0,
+    /* Found in Buildertrend before creating, and linked rather than made. */
+    already: 0,
     unidentified: 0,
     failed: 0,
     skipped: 0,
@@ -653,7 +720,8 @@ export async function run_queue(work_orders, config, record) {
        it is. */
     const created = outcome.ok === true || outcome.created === true;
 
-    if (outcome.ok) summary.created += 1;
+    if (outcome.existing) summary.already += 1;
+    else if (outcome.ok) summary.created += 1;
     else if (created) summary.unidentified += 1;
     else summary.failed += 1;
 
@@ -661,6 +729,7 @@ export async function run_queue(work_orders, config, record) {
       number,
       ok: outcome.ok === true,
       created,
+      existing: outcome.existing === true,
       url: outcome.url,
       title: outcome.title,
       error: outcome.error,
@@ -672,7 +741,7 @@ export async function run_queue(work_orders, config, record) {
       summary.reason = outcome.error || "A job could not be created.";
       summary.skipped = Math.max(
         0,
-        work_orders.length - summary.created - summary.unidentified - summary.failed,
+        work_orders.length - summary.created - summary.already - summary.unidentified - summary.failed,
       );
 
       break;

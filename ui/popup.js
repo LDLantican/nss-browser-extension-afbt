@@ -57,6 +57,45 @@ const STATES = {
 /** Rows needing a person first; the list is read top-down. */
 const ORDER = ["conflict", "rejected", "blocked"];
 
+/**
+ * The two queues going *out*, as the popup words them.
+ *
+ * The status line used to count only work coming in, so a vendor portal signed
+ * out over a weekend — every approved invoice queued, nothing claimed, nothing
+ * on /deliveries — read as "All caught up".
+ */
+const OUTGOING = {
+  invoices: {
+    site: "appfolio",
+    title: "AppFolio invoices",
+    noun: ["approved invoice", "approved invoices"],
+    signed_out: "vendor_signed_out",
+    portal: "the AppFolio vendor portal",
+  },
+  estimates: {
+    site: "buildertrend",
+    title: "Buildertrend estimates",
+    noun: ["approved estimate", "approved estimates"],
+    signed_out: "buildertrend_signed_out",
+    portal: "Buildertrend",
+  },
+};
+
+/**
+ * How old a queue's record may be before the popup stops vouching for it.
+ *
+ * The timer writes one every minute. Older than this means no run has finished
+ * lately — the browser has just started, or a long drain is still going — and
+ * neither a stale problem nor a stale all-clear is worth showing.
+ */
+const OUTGOING_STALE_MS = 10 * 60 * 1000;
+
+/** Refusals that are not this popup's to raise: the setup panel and Settings own them. */
+const OUTGOING_IGNORED = new Set(["signed_out", "not_permitted"]);
+
+/** Refusals worth raising even when the run never learned how much was waiting. */
+const OUTGOING_BLOCKING = new Set(["extension_outdated", "scope_unknown"]);
+
 async function ask(type, payload = {}) {
   try {
     return (await chrome.runtime.sendMessage({ type, payload })) ?? {};
@@ -167,8 +206,14 @@ async function render() {
   const bt_queue = bt_on ? Object.values(state.bt_queue || {}) : [];
   const bt_pending = bt_on ? Object.entries(state.bt_pending_links || {}) : [];
 
-  render_status(failed.length + bt_queue.length + bt_pending.length, state.counts?.pending || 0);
-  render_attention(state, failed, bt_queue, bt_pending);
+  const outgoing = read_outgoing(state, bt_on);
+
+  render_status(
+    outgoing.problems.length + failed.length + bt_queue.length + bt_pending.length,
+    state.counts?.pending || 0,
+    outgoing.unchecked,
+  );
+  render_attention(state, outgoing.problems, failed, bt_queue, bt_pending);
   render_recent(state, jobs.filter((job) => job.state === "synced"));
 
   if (refreshed) return;
@@ -209,27 +254,115 @@ async function render() {
  */
 let refreshed = false;
 
+/**
+ * What the outgoing queues need from a person, from their last recorded run.
+ *
+ * `unchecked` is true while a queue that runs by itself has no recent record,
+ * so the line says it is checking rather than claiming all is well.
+ */
+function read_outgoing(state, bt_on) {
+  const records = state.delivery || {};
+  const now = Date.now();
+  const problems = [];
+  let unchecked = false;
+
+  for (const [kind, words] of Object.entries(OUTGOING)) {
+    if (kind === "estimates" && !bt_on) continue;
+
+    const automatic = kind === "invoices" || state.settings?.bt_auto_estimates !== false;
+    const record = records[kind];
+    const fresh = record && now - (Number(record.at) || 0) <= OUTGOING_STALE_MS;
+
+    if (!fresh) {
+      if (automatic) unchecked = true;
+
+      continue;
+    }
+
+    const problem = outgoing_problem(words, record);
+    if (problem) problems.push(problem);
+  }
+
+  return { problems, unchecked };
+}
+
+function outgoing_problem(words, record) {
+  const waiting = Number(record.waiting) || 0;
+  const [one, many] = words.noun;
+
+  /* The count when the run read one; a refusal before the read says only that
+     there is work, which is still the thing worth knowing. */
+  const waiting_text = waiting > 0
+    ? `${plural(waiting, one, many)} ${waiting === 1 ? "is" : "are"} waiting.`
+    : `${many[0].toUpperCase()}${many.slice(1)} are waiting.`;
+
+  if (record.error === words.signed_out)
+    return {
+      title: words.title,
+      label: "Signed out",
+      text: `${waiting_text} Sign in to ${words.portal} and they will go out within a minute.`,
+      action: { label: "Sign in", site: words.site },
+    };
+
+  if (record.paused)
+    return {
+      title: words.title,
+      label: "Paused",
+      text: record.reason || "Sending is paused because several recent tries failed.",
+      action: { label: "Open Deliveries", deliveries: true },
+    };
+
+  if (record.awaiting_submit)
+    return {
+      title: words.title,
+      label: "Waiting for you",
+      text: "An invoice is filled in and waiting for you to press Submit Invoice in AppFolio.",
+    };
+
+  if (record.ok || OUTGOING_IGNORED.has(record.error)) return null;
+
+  /* A refusal that left known work queued, or one that stops every run until
+     somebody acts. A failed read with nothing known to be waiting is left to
+     the heartbeat's "can't reach the web app". */
+  if (waiting === 0 && !OUTGOING_BLOCKING.has(record.error)) return null;
+
+  return {
+    title: words.title,
+    label: "Not sent",
+    text: `${waiting > 0 ? `${waiting_text} ` : ""}${record.reason || REASONS[record.error] || record.error}`,
+    action: { label: "Try again", send: true },
+  };
+}
+
 /** One line: attention first, then work in flight, then all clear. */
-function render_status(attention, in_progress) {
+function render_status(attention, in_progress, unchecked = false) {
   if (attention > 0) {
     els.status.className = "status status--warn";
-    els.status.textContent = `${plural(attention, "job needs", "jobs need")} your attention`;
+    els.status.textContent = `${plural(attention, "thing needs", "things need")} your attention`;
   } else if (in_progress > 0) {
     els.status.className = "status status--busy";
     els.status.textContent = `Sending ${plural(in_progress, "work order", "work orders")} to the web app…`;
+  } else if (unchecked) {
+    els.status.className = "status status--busy";
+    els.status.textContent = "Checking for approved work…";
   } else {
     els.status.className = "status status--ok";
     els.status.textContent = "All caught up";
   }
 }
 
-function render_attention(state, failed, bt_queue, bt_pending) {
-  els.attention.hidden = failed.length + bt_queue.length + bt_pending.length === 0;
+function render_attention(state, outgoing, failed, bt_queue, bt_pending) {
+  els.attention.hidden = outgoing.length + failed.length + bt_queue.length + bt_pending.length === 0;
   els.attention_list.innerHTML = "";
+
+  for (const problem of outgoing) els.attention_list.appendChild(outgoing_row(problem, state));
 
   for (const job of failed) els.attention_list.appendChild(failed_row(job, state));
   for (const [number, entry] of bt_pending) els.attention_list.appendChild(pending_link_row(number, entry));
-  for (const work_order of bt_queue) els.attention_list.appendChild(bt_queue_row(work_order));
+  const in_flight = new Set((state.bt_in_flight || []).map(String));
+
+  for (const work_order of bt_queue)
+    els.attention_list.appendChild(bt_queue_row(work_order, in_flight.has(String(work_order.number))));
 
   els.attention_actions.innerHTML = "";
 
@@ -320,6 +453,29 @@ function failed_row(job, state) {
   return item;
 }
 
+/** A whole outgoing queue that is stuck, as one row with its one fix. */
+function outgoing_row(problem, state) {
+  const { item, head } = row(problem.title, problem.label, "conflict");
+  const action = problem.action;
+
+  if (action?.site)
+    head.appendChild(
+      button(action.label, "btn btn--quiet job__go", async () => {
+        const result = await ask("OPEN_SIGN_IN", { site: action.site });
+
+        if (result?.ok === false && result.error) say(result.error, "error");
+      }),
+    );
+  else if (action?.deliveries)
+    head.appendChild(anchor(`${app_base(state)}/deliveries`, action.label));
+  else if (action?.send)
+    head.appendChild(button(action.label, "btn btn--quiet job__go", () => send_now()));
+
+  line(item, "job__why", problem.text);
+
+  return item;
+}
+
 /**
  * Jobs Buildertrend already holds that the web app cannot point at.
  *
@@ -353,8 +509,21 @@ function pending_link_row(number, entry) {
   return item;
 }
 
-function bt_queue_row(work_order) {
+function bt_queue_row(work_order, adding = false) {
   const { item, head } = row(work_order.number, "Not in Buildertrend", "queued");
+
+  /* A run already holds this row. The popup closes when the run's tab takes
+     focus, so reopening it used to offer Add again mid-run — and pressing it
+     made a second real job. */
+  if (adding) {
+    const element = button("Adding to Buildertrend…", "btn btn--quiet job__go", () => {});
+    element.disabled = true;
+    head.appendChild(element);
+
+    line(item, "job__where", [work_order.street, work_order.city].filter(Boolean).join(", "));
+
+    return item;
+  }
 
   head.appendChild(
     button("Add to Buildertrend", "btn btn--quiet job__go", async (event) => {
@@ -363,6 +532,13 @@ function bt_queue_row(work_order) {
       element.textContent = "Opening…";
 
       const result = await ask("FILL_JOB", { number: work_order.number });
+
+      if (result?.busy) {
+        say("Buildertrend is already adding jobs. Press Add again when that run finishes.", "warn");
+        element.textContent = "Already adding…";
+
+        return;
+      }
 
       /* A refusal is not a fill. The button goes back to offering the thing it
          failed to do, which is what makes the refusal actionable: fix the
@@ -451,7 +627,7 @@ function describe_send(result, state) {
   return { text: `${parts.join(" · ")}${scope_note(invoice_summary)}.`, kind: "ok" };
 }
 
-els.send_now.addEventListener("click", async () => {
+async function send_now() {
   els.send_now.disabled = true;
   els.send_now.textContent = "Sending…";
 
@@ -469,7 +645,13 @@ els.send_now.addEventListener("click", async () => {
   const { text, kind, link } = describe_send(result, last_state || {});
 
   say(text, kind, link);
-});
+
+  /* The run just rewrote where the queues stand, so the status line and the
+     rows under it are redrawn from that rather than from before the press. */
+  render();
+}
+
+els.send_now.addEventListener("click", send_now);
 
 els.recent_clear.addEventListener("click", async () => {
   await ask("CLEAR_FINISHED");

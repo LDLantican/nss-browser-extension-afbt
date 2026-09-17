@@ -174,7 +174,7 @@ export function describe_bt_run(run) {
   const summary = run.summary || {};
 
   lines.push(
-    `result  : ${summary.created || 0} linked · ${summary.unidentified || 0} unidentified · `
+    `result  : ${summary.created || 0} linked · ${summary.already || 0} already there · ${summary.unidentified || 0} unidentified · `
     + `${summary.failed || 0} failed · ${summary.skipped || 0} not attempted`,
   );
 
@@ -183,7 +183,7 @@ export function describe_bt_run(run) {
   for (const job of run.jobs || []) {
     lines.push("");
     lines.push(`${job.number}`);
-    lines.push(`  created : ${job.created ? "yes" : "NO"}`);
+    lines.push(`  created : ${job.existing ? "no, already in Buildertrend" : job.created ? "yes" : "NO"}`);
 
     if (job.url) lines.push(`  url     : ${job.url}`);
     if (job.error) lines.push(`  problem : ${job.error}`);

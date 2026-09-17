@@ -198,6 +198,11 @@ async function attempt_estimates() {
       return { ok: true, summary: { ...summary, paused: true, reason: response.body.reason || "" } };
 
     const queue = Array.isArray(response.body?.deliveries) ? response.body.deliveries : [];
+
+    /* Before the refusals below, which copy the summary, so the popup can say
+       how many they left queued. */
+    summary.waiting = queue.length;
+
     if (queue.length === 0) return { ok: true, summary, reports };
 
     /* Same gate the invoice drainer uses, and in the same place: before

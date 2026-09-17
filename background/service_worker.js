@@ -32,6 +32,8 @@ import {
   save_bt_last_run,
   bt_last_estimate_run,
   save_bt_last_estimate_run,
+  delivery_status,
+  save_delivery_status,
   migrate_bt_unrecorded,
   tab_errors,
   clear_tab_errors,
@@ -40,9 +42,10 @@ import {
 } from "./store.js";
 import { notify, set_badge } from "./notify.js";
 import { api, normalize_base, origin_pattern } from "./api.js";
-import { fill_job, run_queue, find_existing_job } from "./buildertrend.js";
+import { run_queue, find_existing_job } from "./buildertrend.js";
 import { deliver_estimates_now } from "./estimates.js";
-import { close_owned_tab, is_owned } from "./owned_tabs.js";
+import { is_owned } from "./owned_tabs.js";
+import { PORTALS, show_sign_in, waiting_sign_in_tab } from "./portals.js";
 import {
   deliver_now,
   is_delivery_alarm,
@@ -93,7 +96,7 @@ const handlers = {
   /* ---- state the UI renders from ---------------------------------------- */
 
   async STATE() {
-    const [config, session, counts, jobs, queue, pending, last_run, last_estimate, errors, seen_at] =
+    const [config, session, counts, jobs, queue, pending, last_run, last_estimate, errors, seen_at, outgoing] =
       await Promise.all([
         settings(),
         auth.state(),
@@ -105,6 +108,7 @@ const handlers = {
         bt_last_estimate_run(),
         tab_errors(),
         tab_errors_seen_at(),
+        delivery_status(),
       ]);
 
     return {
@@ -117,8 +121,14 @@ const handlers = {
          was knowable only to itself. A pending link is work somebody has to
          finish, and the last run is the only account of why. */
       bt_pending_links: pending,
+      /* Rows a Buildertrend run is working on right now, so the popup stops
+         offering Add for a job that is being created in another tab. */
+      bt_in_flight: [...bt_in_flight],
       bt_last_run: last_run,
       bt_last_estimate_run: last_estimate,
+      /* Where the invoice and estimate queues stood after their last run, so
+         the status line covers work going out as well as work coming in. */
+      delivery: outgoing,
       /* A count and not the reports: they carry screenshots, and the popup
          only says how many there are and where to read them. */
       tab_errors_unseen: errors.filter((entry) => entry.at > seen_at).length,
@@ -241,7 +251,7 @@ const handlers = {
    * run closes its tab now, and the report is what is left to look at.
    */
   async DELIVER_NOW() {
-    return deliver_now({ manual: true });
+    return record_delivery("invoices", await deliver_now({ manual: true }));
   },
 
   /**
@@ -529,7 +539,33 @@ const handlers = {
    * now, never takes focus, and so has no reason to wait for a button.
    */
   async DELIVER_ESTIMATES() {
-    return deliver_estimates_now({ manual: true });
+    return record_delivery("estimates", await deliver_estimates_now({ manual: true }));
+  },
+
+  /**
+   * Put a portal's sign-in page in front of somebody.
+   *
+   * The tab a timed run already left open when there is one — opening a second
+   * is how a desk collects sign-in tabs — and the portal's home page otherwise,
+   * which redirects to the sign-in page by itself.
+   */
+  async OPEN_SIGN_IN(payload) {
+    const site = payload?.site;
+    const portal = PORTALS[site];
+
+    if (!portal) return { ok: false, error: `Unknown portal: ${site}.` };
+
+    const waiting = await waiting_sign_in_tab(site);
+
+    if (waiting !== null) {
+      await show_sign_in(waiting);
+
+      return { ok: true };
+    }
+
+    await chrome.tabs.create({ url: portal.home, active: true });
+
+    return { ok: true };
   },
 
   /**
@@ -551,11 +587,11 @@ const handlers = {
     let answer = { ok: true };
 
     scheduled_pass = (async () => {
-      const invoices = await deliver_now({ manual: true }).catch(failed);
+      const invoices = await record_delivery("invoices", await deliver_now({ manual: true }).catch(failed));
       const config = await settings();
 
       const estimates = config.buildertrend_enabled !== false
-        ? await deliver_estimates_now({ manual: true }).catch(failed)
+        ? await record_delivery("estimates", await deliver_estimates_now({ manual: true }).catch(failed))
         : null;
 
       answer = { ok: true, invoices, estimates };
@@ -609,6 +645,15 @@ const handlers = {
     return { ok: true };
   },
 
+  /**
+   * The popup's "Add to Buildertrend", for one queued row.
+   *
+   * The same run as RUN_BT_QUEUE over a queue of one. It used to call fill_job
+   * directly and stop, so a job it saved never left the queue and its link was
+   * never recorded — the popup went on offering Add, and pressing it again made
+   * a second real job. Everything that happens after a save lives in
+   * create_bt_jobs() so there is one copy of it.
+   */
   async FILL_JOB({ number }) {
     const config = await settings();
 
@@ -620,12 +665,7 @@ const handlers = {
 
     if (!work_order) return { ok: false, error: "That work order is not in the queue." };
 
-    const outcome = await fill_job(work_order, config);
-
-    /* One job, so nothing reuses the tab. A failure closed it already. */
-    if (outcome.tab_id) await close_owned_tab(outcome.tab_id);
-
-    return outcome;
+    return create_bt_jobs([work_order], config);
   },
 
   /**
@@ -647,102 +687,135 @@ const handlers = {
     if (config.buildertrend_enabled === false)
       return { ok: false, error: "Buildertrend is switched off in Settings." };
 
-    const queue = await bt_queue();
-    const rows = Object.values(queue);
+    const rows = Object.values(await bt_queue());
 
     if (rows.length === 0) return { ok: true, summary: { created: 0, failed: 0, skipped: 0 } };
 
-    /* One lookup for the whole batch rather than one per job. A web app that
-       cannot be reached answers nothing, and then nothing is skipped — which is
-       the safe direction only because fill_job refuses on its own when the
-       scope cannot be read. */
-    const already = new Set();
-
-    try {
-      const answer = await api.lookup(rows.map((row) => String(row.number)));
-
-      if (answer.ok)
-        for (const [number, held] of Object.entries(answer.body?.work_orders || {}))
-          if ((held?.buildertrend_url || "") !== "") already.add(String(number));
-    } catch {
-      /* Left empty on purpose; see above. */
-    }
-
-    /* Anything left over from a previous run goes first: it is a single POST to
-       our own server and, until it lands, the work order looks to everything
-       else like a job that was never created. */
-    await flush_pending_links();
-
-    const outstanding = rows.filter((row) => !already.has(String(row.number)));
-
-    if (already.size > 0) await drop_from_bt_queue([...already]);
-
-    if (outstanding.length === 0)
-      return { ok: true, summary: { created: 0, failed: 0, skipped: 0, already: already.size } };
-
-    const started_at = Date.now();
-    const jobs = [];
-
-    const summary = await run_queue(outstanding, config, async (outcome) => {
-      const entry = {
-        number: outcome.number,
-        created: outcome.created === true,
-        ok: outcome.ok === true,
-        url: outcome.url || null,
-        error: outcome.error || "",
-        detail: outcome.detail || null,
-        link: null,
-      };
-
-      /* Nothing was created, so the row stays queued and there is nothing to
-         link. This is the only path that leaves `bt_queue` untouched, and it
-         has to be, because it is the only one where Buildertrend holds
-         nothing. */
-      if (!entry.created) {
-        jobs.push(entry);
-
-        return;
-      }
-
-      /* From here Buildertrend holds a job, so the row leaves the queue
-         whatever else happens: leaving it is what makes a second real job on
-         the next run, and two jobs sharing a title make the id unfindable for
-         both. The shortfall is parked instead — never dropped. */
-      await drop_from_bt_queue([outcome.number]);
-
-      if (!outcome.url) {
-        await park_pending_link(outcome.number, null, outcome.title || "", outcome.error || "");
-        jobs.push(entry);
-
-        return;
-      }
-
-      entry.link = await record_link(outcome.number, outcome.url);
-
-      if (!entry.link.ok)
-        await park_pending_link(outcome.number, outcome.url, outcome.title || "", entry.link.error);
-
-      jobs.push(entry);
-    });
-
-    summary.already = already.size;
-    summary.pending = Object.keys(await bt_pending_links()).length;
-
-    await save_bt_last_run({
-      started_at,
-      finished_at: Date.now(),
-      summary,
-      jobs,
-    });
-
-    /* One notification for the run, not one per job: notify.js reuses a single
-       id, so per-job messages would overwrite each other and only the last
-       would ever be readable. */
-    notify("Buildertrend", bt_run_message(summary));
-
-    return { ok: true, summary };
+    return create_bt_jobs(rows, config);
   },
 };
+
+/**
+ * The one Buildertrend creation run that may be going, if any.
+ *
+ * Module state, like `scheduled_pass`. Two runs side by side — a sync's run and
+ * a press of Add, or two presses from a popup that closed and reopened — each
+ * saw the row still queued and each created a job, and two jobs sharing a title
+ * make both unlinkable. A second request now answers `busy` instead.
+ *
+ * An evicted worker forgets this, and look_before_creating() in buildertrend.js
+ * is what still stops a duplicate then.
+ */
+let bt_run = null;
+
+/** The numbers the current run holds, so the popup can stop offering Add. */
+const bt_in_flight = new Set();
+
+function create_bt_jobs(rows, config) {
+  if (bt_run !== null) return Promise.resolve({ ok: true, busy: true });
+
+  for (const row of rows) bt_in_flight.add(String(row.number));
+
+  bt_run = work_bt_jobs(rows, config).finally(() => {
+    bt_run = null;
+    bt_in_flight.clear();
+  });
+
+  return bt_run;
+}
+
+async function work_bt_jobs(rows, config) {
+  /* One lookup for the whole batch rather than one per job. A web app that
+     cannot be reached answers nothing, and then nothing is skipped — which is
+     the safe direction only because fill_job refuses on its own when the
+     scope cannot be read. */
+  const already = new Set();
+
+  try {
+    const answer = await api.lookup(rows.map((row) => String(row.number)));
+
+    if (answer.ok)
+      for (const [number, held] of Object.entries(answer.body?.work_orders || {}))
+        if ((held?.buildertrend_url || "") !== "") already.add(String(number));
+  } catch {
+    /* Left empty on purpose; see above. */
+  }
+
+  /* Anything left over from a previous run goes first: it is a single POST to
+     our own server and, until it lands, the work order looks to everything
+     else like a job that was never created. */
+  await flush_pending_links();
+
+  const outstanding = rows.filter((row) => !already.has(String(row.number)));
+
+  if (already.size > 0) await drop_from_bt_queue([...already]);
+
+  if (outstanding.length === 0)
+    return { ok: true, summary: { created: 0, failed: 0, skipped: 0, already: already.size } };
+
+  const started_at = Date.now();
+  const jobs = [];
+
+  const summary = await run_queue(outstanding, config, async (outcome) => {
+    const entry = {
+      number: outcome.number,
+      created: outcome.created === true,
+      existing: outcome.existing === true,
+      ok: outcome.ok === true,
+      url: outcome.url || null,
+      error: outcome.error || "",
+      detail: outcome.detail || null,
+      link: null,
+    };
+
+    /* Nothing was created, so the row stays queued and there is nothing to
+       link. This is the only path that leaves `bt_queue` untouched, and it
+       has to be, because it is the only one where Buildertrend holds
+       nothing. */
+    if (!entry.created) {
+      jobs.push(entry);
+
+      return;
+    }
+
+    /* From here Buildertrend holds a job, so the row leaves the queue
+       whatever else happens: leaving it is what makes a second real job on
+       the next run, and two jobs sharing a title make the id unfindable for
+       both. The shortfall is parked instead — never dropped. */
+    await drop_from_bt_queue([outcome.number]);
+
+    if (!outcome.url) {
+      await park_pending_link(outcome.number, null, outcome.title || "", outcome.error || "");
+      jobs.push(entry);
+
+      return;
+    }
+
+    entry.link = await record_link(outcome.number, outcome.url);
+
+    if (!entry.link.ok)
+      await park_pending_link(outcome.number, outcome.url, outcome.title || "", entry.link.error);
+
+    jobs.push(entry);
+  });
+
+  summary.already = (summary.already || 0) + already.size;
+  summary.pending = Object.keys(await bt_pending_links()).length;
+
+  await save_bt_last_run({
+    started_at,
+    finished_at: Date.now(),
+    summary,
+    jobs,
+  });
+
+  /* One notification for the run, not one per job: notify.js reuses a single
+     id, so per-job messages would overwrite each other and only the last
+     would ever be readable. */
+  notify("Buildertrend", bt_run_message(summary));
+
+  return { ok: true, summary };
+}
 
 /**
  * Tell the web app where a job ended up, and say plainly whether it took it.
@@ -970,18 +1043,48 @@ chrome.alarms.onAlarm.addListener((alarm) => {
  */
 let scheduled_pass = null;
 
+/**
+ * Keep where an outgoing queue stood, for the popup's status line.
+ *
+ * Every run's result used to be dropped here, on the reasoning that a failure
+ * shows on /deliveries. A signed-out portal never gets that far — the run
+ * refuses before claiming anything, which is right — so it showed nowhere, and
+ * the popup said "All caught up" over a queue of approved invoices.
+ *
+ * Returns what it was given, so a caller can wrap a run in it. A run that did
+ * not happen (another was already going) leaves the last record alone.
+ */
+async function record_delivery(kind, result) {
+  if (!result || result.skipped === "already running") return result;
+
+  const summary = result.summary || {};
+
+  await save_delivery_status(kind, {
+    at: Date.now(),
+    ok: result.ok !== false,
+    error: result.ok === false ? String(result.error || "") : "",
+    waiting: Number(summary.waiting) || 0,
+    paused: summary.paused === true,
+    awaiting_submit: summary.awaiting_submit === true,
+    dry_run: summary.dry_run === true || (summary.rehearsed || 0) > 0,
+    reason: String(summary.reason || ""),
+  }).catch(() => null);
+
+  return result;
+}
+
 function scheduled_delivery() {
   if (scheduled_pass !== null) return scheduled_pass;
 
   scheduled_pass = (async () => {
-    await deliver_now().catch(() => null);
+    await record_delivery("invoices", await deliver_now().catch(() => null));
 
     /* Read fresh each pass, so switching it off in Settings takes effect on
        the next minute rather than the next browser start. */
     const config = await settings();
 
     if (config.buildertrend_enabled !== false && config.bt_auto_estimates !== false)
-      await deliver_estimates_now().catch(() => null);
+      await record_delivery("estimates", await deliver_estimates_now().catch(() => null));
   })().finally(() => {
     scheduled_pass = null;
   });

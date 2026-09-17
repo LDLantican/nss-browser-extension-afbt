@@ -84,6 +84,10 @@
   const LOOKUP_BUDGET_MS = 12000;
   const POLL_MS = 250;
 
+  /* How long a filtered list must hold with no match before the job is called
+     absent. A miss here lets the extension create a job, so it is not hurried. */
+  const ABSENT_SETTLE_MS = 3000;
+
   const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -175,24 +179,60 @@
         detail: { ...seen(query, wanted), search_box: false },
       };
 
+    /* Whether the list has painted any job at all before it is filtered. It is
+       what lets a miss be believed: an empty list in a tab Chrome never painted
+       also shows no match, and "absent" from that page is how a second real job
+       gets created. */
+    const painted = (await wait_for(() => rows().length > 0, LOOKUP_BUDGET_MS)) === true;
+
     type_into(search, query);
 
-    const matches = await wait_for(() => {
-      const found = rows().filter((row) => row.title === wanted);
+    /* When the filter visibly took effect — every row left mentions the number,
+       or none are left — and has held with no exact match for ABSENT_SETTLE_MS,
+       the job is not there. Timed from the filter taking effect rather than from
+       typing, so a slow filter is waited for rather than read as a miss. */
+    let filtered_since = null;
+    let absent = false;
 
-      return found.length > 0 ? found : null;
+    const matches = await wait_for(() => {
+      const present = rows();
+      const found = present.filter((row) => row.title === wanted);
+
+      if (found.length > 0) return found;
+
+      const applied = present.every((row) => row.title.includes(query));
+
+      if (!applied) {
+        filtered_since = null;
+
+        return null;
+      }
+
+      filtered_since ??= Date.now();
+
+      if (painted && Date.now() - filtered_since >= ABSENT_SETTLE_MS) {
+        absent = true;
+
+        return [];
+      }
+
+      return null;
     }, LOOKUP_BUDGET_MS);
 
     /* Read before the box is cleared: clearing re-renders the list, and the
        rows worth reporting are the ones the match was actually run against. */
-    const evidence = { ...seen(query, wanted), search_box: true };
+    const evidence = { ...seen(query, wanted), search_box: true, painted };
 
     type_into(search, "");
 
-    if (matches === null)
+    if (matches === null || matches.length === 0)
       return {
         from: LANDING_REPLY,
         ok: false,
+        /* Only a painted, filtered list with no match says the job is not
+           there. Everything else is "could not tell", and callers that create
+           jobs must treat it as such. */
+        absent,
         error: `Buildertrend's job list did not show "${wanted}", so nothing was recorded.`,
         detail: evidence,
       };
@@ -203,9 +243,10 @@
       return {
         from: LANDING_REPLY,
         ok: false,
+        duplicate: true,
         error:
-          `Buildertrend has more than one job called "${wanted}", so none of them was recorded. `
-          + "Check which one is the new job before running it again.",
+          `Buildertrend has more than one job called "${wanted}" (ids ${[...ids].join(", ")}), `
+          + "so none of them was recorded. Delete the extras in Buildertrend, then try again.",
         detail: evidence,
       };
 

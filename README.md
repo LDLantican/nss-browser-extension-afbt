@@ -130,9 +130,12 @@ wrong decision silently, and an honest one costs a click.
 
 **The popup** is written for whoever is doing the day's work, and answers two
 questions: is everything all right, and does anything need me? It shows one
-status line (*All caught up*, *N jobs need your attention*, or *Sending…*), then
-only the rows a person has to act on — each with the reason and one button (*Try
-again*, *Open in web app*, *Link now* or *Add to Buildertrend*) — and a folded
+status line (*All caught up*, *N things need your attention*, *Sending…*, or
+*Checking for approved work…* when no invoice run has finished in ten minutes),
+then only the rows a person has to act on — each with the reason and one button
+(*Try again*, *Open in web app*, *Link now*, *Add to Buildertrend*, or *Sign in*
+when approved invoices or estimates are held up by a signed-out AppFolio or
+Buildertrend) — and a folded
 *Recently sent* list. Its footer says approved work goes out by itself every
 minute and offers **Send now**, which runs the invoice pass and then the
 estimate pass and reports the result in one sentence.

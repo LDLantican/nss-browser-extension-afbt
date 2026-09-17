@@ -21,6 +21,7 @@ const KEYS = {
   bt_pending_links: "bt_pending_links",
   bt_last_run: "bt_last_run",
   bt_last_estimate_run: "bt_last_estimate_run",
+  delivery_status: "delivery_status",
   tab_errors: "tab_errors",
   tab_errors_seen_at: "tab_errors_seen_at",
 };
@@ -213,6 +214,26 @@ export function bt_last_estimate_run() {
 
 export function save_bt_last_estimate_run(value) {
   return update(KEYS.bt_last_estimate_run, null, () => value);
+}
+
+/**
+ * Where the outgoing queues stood after their last run: `{ invoices, estimates }`,
+ * each `{ at, ok, error, waiting, paused, awaiting_submit, reason }`.
+ *
+ * Not a run report — those are `bt_last_estimate_run` and the Troubleshooting
+ * card. This is what the popup's status line reads, and it exists because the
+ * line used to look only at work on its way *in*: a vendor portal that had been
+ * signed out all weekend left every approved invoice queued, the run refused
+ * before claiming anything (so /deliveries stayed empty too), and the popup said
+ * "All caught up". Written after every run, timed or pressed, empty or not,
+ * because here "nothing was waiting" is exactly the news.
+ */
+export function delivery_status() {
+  return read(KEYS.delivery_status, {});
+}
+
+export function save_delivery_status(kind, value) {
+  return update(KEYS.delivery_status, {}, (current) => ({ ...current, [kind]: value }));
 }
 
 /**
