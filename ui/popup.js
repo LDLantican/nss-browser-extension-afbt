@@ -415,7 +415,7 @@ function render_recent(state, synced, bt_on) {
 
 /**
  * Where one job stands outside the web app: its BuilderTrend job, its AppFolio
- * invoice, its BuilderTrend estimate.
+ * invoice and whether Work Done followed it, its BuilderTrend estimate.
  *
  * Read from the lookup's `outside` block, which the web app computes and the
  * REFRESH on open keeps current. Nothing here is remembered or inferred: an
@@ -454,17 +454,27 @@ function outside_chips(outside, bt_on) {
   const invoice = outside.appfolio_invoice;
   const invoice_chip = invoice ? delivery("Invoice", invoice.state) : null;
 
-  if (invoice_chip) {
-    /* Invoiced, and Work Done did not land. Not a money problem, so amber rather
-       than red, and never shown for `null` — that is a delivery nobody reported
-       on, not one known to be open. */
-    if (invoice.state === "delivered" && invoice.work_done === false)
+  if (invoice_chip) chips.push(invoice_chip);
+
+  /* Work Done is its own chip so that green on the invoice always means the
+     money is in. Only once the invoice is delivered: before that Work Done has
+     not been tried, and a second chip would repeat the invoice's problem.
+     Not a money problem when it is open, so amber rather than red. */
+  if (invoice?.state === "delivered") {
+    if (invoice.work_done === true)
+      chips.push({ tone: "synced", label: "Work Done", title: "Work Done is pressed in AppFolio." });
+    else if (invoice.work_done === false)
       chips.push({
         tone: "blocked",
-        label: "Invoice · open",
-        title: "Invoiced, but Work Done was not pressed in AppFolio. Deliveries in the web app lists it.",
+        label: "Not Work Done",
+        title: "Invoiced, but the job is still open in AppFolio. Mark it on Deliveries in the web app.",
       });
-    else chips.push(invoice_chip);
+    else
+      chips.push({
+        tone: "none",
+        label: "Work Done ?",
+        title: "Nobody reported whether Work Done was pressed. Check the job in AppFolio.",
+      });
   }
 
   if (bt_on && outside.buildertrend_estimate) {

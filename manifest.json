@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NSS Appfolio Helper",
-  "version": "2.15.2",
+  "version": "2.15.4",
   "description": "Sync Appfolio work orders to the ASH web app, deliver approved invoices back to the Appfolio vendor portal, and import them into Buildertrend.",
   "icons": {
     "16": "icons/16.png",

@@ -735,7 +735,23 @@ async function deliver_one(delivery, options, reports) {
      `delivered` result (work_order_deliveries.work_done_at / work_done_error,
      listed on /deliveries), and a miss is recorded in Troubleshooting with what
      the page showed — the tab is still open here, so its DOM can be had. */
-  const done = await command(url, "VENDOR_WORK_DONE", {}).catch(() => null);
+  let done = await command(url, "VENDOR_WORK_DONE", {}).catch(() => null);
+
+  /* Believed only from a fresh load. The first live run reported Work Done
+     from a page with a confirmation dialog still open on it, and nothing
+     looked again before the tab closed. The page's own reading is good now,
+     but a reload is one page load against a green chip nobody re-examines. */
+  if (done?.ok === true && done.already !== true) {
+    const reread = await command(url, "VENDOR_INSPECT", { number: delivery.number }).catch(() => null);
+    const status = String(reread?.status || "").replace(/\s+/g, " ").trim();
+
+    if (!SETTLED_STATUSES.includes(status.toLowerCase()))
+      done = {
+        ok: false,
+        error: `Work Done looked saved, but the reloaded page shows "${status || "no status"}".`,
+      };
+  }
+
   const work_done = done?.ok === true;
   const work_done_error = work_done ? "" : done?.error || "The work order page did not answer.";
 

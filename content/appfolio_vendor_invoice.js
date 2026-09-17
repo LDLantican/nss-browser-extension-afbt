@@ -140,6 +140,12 @@
          confirmed in the captures under storage/temporary-items/. */
       detail_description: ".js-detail-description",
       work_done: "button.js-done-button",
+
+      /* Work Done does not change anything by itself: it opens "Submit this
+         Work Order as Done?" with Yes and Cancel, and Yes is what sends the
+         PATCH. Watched live on 17 September 2026 (19426-1). The id is
+         AppFolio's own; the dialog has no js- hook. */
+      work_done_yes: "#work-order-modal-yes-button",
       notes_button: "button.js-notes-button",
       invoices_button: ".js-invoices-button",
 
@@ -826,38 +832,76 @@
     },
 
     /**
-     * Move the job to Work Done.
+     * Whether the badge says the job is past Work Done.
+     *
+     * `Under Review` is what Yes produces, watched live. The later three are the
+     * rest of the billing pipeline and can only follow it. Compared
+     * case-insensitively because the badge renders in capitals.
+     */
+    is_work_done() {
+      return /^(under review|payment pending|payment sent|closed)$/i.test(
+        app.text(app.SELECTORS.status).replace(/\s+/g, " "),
+      );
+    },
+
+    /**
+     * Move the job to Work Done, and say so only when the badge does.
      *
      * Scoped by class rather than text: the status dropdown carries a menu item
      * with the same words, and clicking that one opens a menu instead.
+     *
+     * Two clicks, not one. The button opens "Submit this Work Order as Done?"
+     * and only Yes sends anything. While that dialog is open the page unmounts
+     * the badge and the button, and the previous version took "the button is
+     * gone" for success — so 19426-1 was reported Work Done with the dialog
+     * still open, and closing the tab dismissed it. The only success signal now
+     * is the badge reading a post-Work-Done status, which the page renders from
+     * the server's answer. The button is not a signal either way: it stays on
+     * the page, disabled, after Work Done.
+     *
+     * The toast that follows offers Revert for a few seconds. The change is
+     * already saved by then, so there is nothing to wait out, and nothing here
+     * goes near it.
      */
     async work_done() {
+      /* Already done — by a person, or by an earlier run whose report was
+         lost. Pressing again would open a dialog on a disabled path. */
+      if (app.is_work_done()) return { ok: true, already: true };
+
       const button = document.querySelector(app.SELECTORS.work_done);
 
       if (button === null)
         return { ok: false, error: "Could not find the Work Done button.", seen: app.work_done_seen() };
 
-      const before = app.text(app.SELECTORS.status);
+      if (button.disabled)
+        return { ok: false, error: "The Work Done button is disabled.", seen: app.work_done_seen() };
 
       button.click();
 
-      /* Confirmed, where before this returned {ok: true} on an unverified
-         click. It was the only command in the file that neither waited for its
-         control nor checked its effect, and the only one whose result
-         delivery.js discards — so a miss was both likely and permanently
-         invisible. Either signal will do: AppFolio may retire the button, or
-         move the job off Scheduled, and which it does is its business. */
-      const moved = await app.wait_for(() =>
-        document.querySelector(app.SELECTORS.work_done) === null
-        || app.text(app.SELECTORS.status) !== before
-          ? true
-          : null,
-      );
+      /* Yes only inside the dialog that asks this question, so a stray modal
+         with a Yes of its own is never answered. */
+      const yes = await app.wait_for(() => {
+        const candidate = document.querySelector(app.SELECTORS.work_done_yes);
+        const dialog = candidate?.closest(".modal, [role='dialog']");
+
+        return candidate && /as done/i.test(dialog?.textContent || "") ? candidate : null;
+      });
+
+      if (yes === null)
+        return {
+          ok: false,
+          error: "Work Done was pressed and the confirmation did not appear.",
+          seen: app.work_done_seen(),
+        };
+
+      yes.click();
+
+      const moved = await app.wait_for(() => (app.is_work_done() ? true : null));
 
       return moved === null
         ? {
             ok: false,
-            error: "Work Done was pressed and the work order did not change.",
+            error: "Yes was pressed on Work Done and the status did not change.",
             seen: app.work_done_seen(),
           }
         : { ok: true };
