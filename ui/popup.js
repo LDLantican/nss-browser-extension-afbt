@@ -19,6 +19,7 @@
  */
 
 import { REASONS, scope_note } from "./describe.js";
+import { render_worker, wire_worker } from "./worker_panel.js";
 
 const els = {
   alert: document.getElementById("alert"),
@@ -41,6 +42,13 @@ const els = {
   open_settings: document.getElementById("open-settings"),
   tab_errors: document.getElementById("tab-errors"),
   tab_errors_view: document.getElementById("tab-errors-view"),
+};
+
+const worker_els = {
+  panel: document.getElementById("worker"),
+  processing: document.getElementById("worker-processing"),
+  status: document.getElementById("worker-status"),
+  connections: document.getElementById("worker-connections"),
 };
 
 /** Plain wording for each ledger state, and whether it needs a person. */
@@ -215,6 +223,7 @@ async function render() {
   );
   render_attention(state, outgoing.problems, failed, bt_queue, bt_pending);
   render_recent(state, jobs.filter((job) => job.state === "synced"), bt_on);
+  await render_worker(ask, worker_els);
 
   if (refreshed) return;
 
@@ -748,6 +757,7 @@ els.recent_clear.addEventListener("click", async () => {
 });
 
 els.open_settings.addEventListener("click", () => chrome.runtime.openOptionsPage());
+wire_worker(ask, worker_els, render);
 els.setup_go.addEventListener("click", () => chrome.runtime.openOptionsPage());
 
 /* Straight to the Troubleshooting card rather than the top of Settings. */

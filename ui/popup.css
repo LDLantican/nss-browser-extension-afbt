@@ -280,3 +280,20 @@ main[hidden] {
 .foot__problem[hidden] {
   display: none;
 }
+
+/* The 3.0 delivery worker panel. */
+.worker__switch {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-weight: 600;
+}
+
+.worker__connections {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.worker__connections li + li {
+  margin-top: 0.25rem;
+}

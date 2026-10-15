@@ -51,6 +51,35 @@ import {
   is_delivery_alarm,
   start_delivery_schedule,
 } from "./delivery.js";
+import { from_extension_page, from_tab_on } from "./senders.js";
+import { start_worker_schedule, worker_sign_in, worker_sign_out } from "../worker/index.js";
+
+/**
+ * The handlers a content script may reach, and from which sites. Everything
+ * else here — settings, sign-in, the queues' buttons — is answered only for the
+ * extension's own pages; see background/senders.js.
+ */
+const APPFOLIO = ["*.appfolio.com"];
+const BUILDERTREND = ["buildertrend.net"];
+
+const PAGE_MESSAGES = {
+  STATE: APPFOLIO,
+  STATUSES: APPFOLIO,
+  SYNC: APPFOLIO,
+  QUEUE_FOR_BT: APPFOLIO,
+  RUN_BT_QUEUE: APPFOLIO,
+  CRITICAL_ERROR: BUILDERTREND,
+  FLASH_ERROR: BUILDERTREND,
+  FLASH_ALERT: BUILDERTREND,
+};
+
+function sender_allowed(type, sender) {
+  if (from_extension_page(sender)) return true;
+
+  const hosts = PAGE_MESSAGES[type];
+
+  return hosts !== undefined && from_tab_on(sender, hosts);
+}
 
 /**
  * The message out of a payload that may be a bare string.
@@ -338,8 +367,10 @@ const handlers = {
 
     /* Cleared locally rather than revoked. The token belongs to the address we
        are leaving, and asking the new one to revoke it would be asking the
-       wrong server — it can be ended from the old app's own account page. */
+       wrong server — it can be ended from the old app's own account page.
+       The delivery worker's device token likewise. */
     await clear_auth();
+    await worker_sign_out();
 
     const cleared = await sync.clear_all();
     await refresh_badge();
@@ -389,11 +420,18 @@ const handlers = {
 
     await refresh_badge();
 
+    /* The same password registers this browser as a delivery worker for the
+       new queue (3.0). A refusal there does not undo the sign-in above: the
+       legacy queue works without it, and the answer says why the new one
+       will not. */
+    if (result.ok) return { ...result, worker: await worker_sign_in({ email, password, device_name }) };
+
     return result;
   },
 
   async SIGN_OUT() {
     const result = await auth.sign_out();
+    await worker_sign_out();
     await refresh_badge();
 
     return result;
@@ -997,6 +1035,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 
   if (!handler) return false;
 
+  if (!sender_allowed(message.type, sender)) {
+    respond({ ok: false, error: "That request is not accepted from this page." });
+
+    return false;
+  }
+
   /* `?? {}` rather than `|| {}`: the Buildertrend script's reports carry a bare
      string as their payload, and `||` would throw an empty object away along
      with it. */
@@ -1108,6 +1152,7 @@ async function wake() {
      the same name, so re-arming on every wake is how the schedule survives an
      update that changed its period. */
   start_delivery_schedule();
+  start_worker_schedule();
 
   sync.trigger();
 }

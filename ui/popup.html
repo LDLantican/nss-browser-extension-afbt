@@ -46,6 +46,20 @@
         <p class="panel__actions" id="attention-actions"></p>
       </section>
 
+      <!-- The 3.0 delivery worker: the new queue, beside the legacy one. -->
+      <section class="panel worker" id="worker" hidden>
+        <h2>Delivery worker</h2>
+
+        <label class="worker__switch">
+          <input type="checkbox" id="worker-processing" />
+          Process ASH jobs
+        </label>
+
+        <p class="field__hint" id="worker-status" hidden></p>
+
+        <ul class="worker__connections" id="worker-connections" hidden></ul>
+      </section>
+
       <details class="panel recent" id="recent" hidden>
         <summary id="recent-summary">Recently sent</summary>
 

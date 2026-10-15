@@ -282,10 +282,25 @@ els.app_form.addEventListener("submit", async (event) => {
 
   let origin;
 
+  let parsed;
+
   try {
-    origin = `${new URL(url).origin}/*`;
+    parsed = new URL(url);
+    origin = `${parsed.origin}/*`;
   } catch {
-    say("That does not look like a web address. Include http:// or https://.", "error");
+    say("That does not look like a web address. Include https://.", "error");
+
+    return;
+  }
+
+  /* Every call carries a credential, so only https — except on this computer,
+     where the development server lives and nothing crosses a network. The
+     manifest allows the same addresses and no others, so anything else would
+     be refused by the permission request below anyway; this says why. */
+  const loopback = ["localhost", "127.0.0.1"].includes(parsed.hostname);
+
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) {
+    say("The web app's address must start with https://.", "error");
 
     return;
   }
@@ -299,7 +314,12 @@ els.app_form.addEventListener("submit", async (event) => {
   try {
     granted = await chrome.permissions.request({ origins: [origin] });
   } catch (error) {
-    say(error?.message || "The browser refused the permission request.", "error");
+    say(
+      /manifest/i.test(String(error?.message))
+        ? "This extension only works with the ASH web app at alabamasignaturehomes.com, or a development copy on this computer."
+        : error?.message || "The browser refused the permission request.",
+      "error",
+    );
 
     return;
   }
@@ -380,7 +400,12 @@ els.sign_in_form.addEventListener("submit", async (event) => {
     return;
   }
 
-  say("Signed in. You can close this page.", "ok");
+  /* The legacy queue is signed in either way; the new delivery worker (3.0)
+     may not be, and the person should hear why rather than find out later. */
+  if (result.worker && result.worker.ok !== true)
+    say(`Signed in. The new delivery worker is not: ${result.worker.error || "the web app refused it."}`, "warn");
+  else say("Signed in. You can close this page.", "ok");
+
   render();
 });
 

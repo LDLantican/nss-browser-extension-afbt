@@ -40,7 +40,10 @@ extension is the first step of it.
    permission is requested at the moment you save.
 4. Sign in with your web app email and password. This exchanges them once for a
    token stored in this browser; the password is not kept. The device appears on
-   the web app's **Your Account** page, where you can end its access.
+   the web app's **Your Account** page, where you can end its access. The same
+   sign-in registers this browser as a **delivery worker** for the new queue
+   (see [The 3.0 delivery worker](#the-30-delivery-worker)), which is listed on
+   that page too.
 5. If ASH still uses Buildertrend, check the values in section 3 — job type, job
    group, client name, and the client's Buildertrend row id.
 
@@ -50,6 +53,12 @@ There is no environment switch. The extension talks to whichever address is in
 Settings and nothing else, so one install points at one web app at a time:
 `http://localhost/projects/alabamasignaturehomes` under XAMPP,
 `http://localhost:6789` under the dev server, or the real domain.
+
+**Only those.** Since 3.0 the manifest names the addresses it may ever ask for —
+`https://alabamasignaturehomes.com`, its subdomains, and `localhost` /
+`127.0.0.1` on any port — where it used to accept any address at all. Every
+call carries a credential, so anything that is not this computer must be https.
+A web app moved to another domain needs a manifest change and a new version.
 
 **Changing that address signs this device out and clears the sync list**, on
 purpose. The token was issued by the app you are leaving and the new one will
@@ -166,6 +175,18 @@ background/     the service worker: all network, credentials and queues
   owned_tabs.js   which tabs this extension opened, locking them, closing them
   tab_errors.js   what a tab showed when a run gave up on it
   notify.js       notifications and the toolbar badge
+  senders.js      which pages may send the service worker which messages
+worker/         the 3.0 delivery worker (the new queue, /api/worker/*)
+  runtime.js      one tick: outbox, heartbeat, the job in hand, claims
+  job.js          one job as a step machine that survives the worker dying
+  client.js       the worker API, device and access tokens
+  outbox.js       results kept until the web app has them
+  journal.js      the popup's short account of recent jobs
+  registry.js     the adapters this build carries
+  chrome_env.js   every effect the runtime has, over chrome.*
+  index.js        the alarm, the messages, the wiring
+adapters/       one folder per platform-and-role pair
+  fixture/        a stand-in vendor portal packaged in the extension, for tests
 content/        the page scripts
   appfolio_scrape.js       shared reader, loaded first in both AppFolio entries
   appfolio_list.js         badges, the action bar, reading AppFolio's ticks
@@ -173,6 +194,7 @@ content/        the page scripts
   buildertrend_add_job.js  v1's form filler, near enough unchanged
   tab_guard.js             the lock on a tab the extension is working in
 ui/             popup and options
+tests/          node tests/run.mjs, or open tests/index.html inside the extension
 ```
 
 Everything that touches the network lives in the service worker, and that is not
@@ -183,6 +205,63 @@ headers at all.
 
 No build step, no dependencies, no bundler — the browser loads these files as
 they are.
+
+## The 3.0 delivery worker
+
+The web app is moving its work orders to new tables (its
+`docs/architecture/`), and with them to a new delivery queue that this
+extension works through `/api/worker/*` (the web app's `docs/worker-api.md`).
+3.0 adds the runtime for that queue **beside** the one above, which keeps
+draining the legacy queue until legacy is retired. The two share nothing but
+the web app's address: separate credentials, a separate alarm
+(`ash-worker-tick`, every minute), separate tabs.
+
+**What a person sees.** The popup's *Delivery worker* panel: a **Process ASH
+jobs** switch (on by default), and for each connection this browser could work,
+either "ready" or what would make it ready — "sign in to it in this browser",
+"paused on the web app". Those words are the web app's own answer to the
+heartbeat. Jobs run in background tabs gathered into one collapsed tab group
+called **ASH**.
+
+**Signing in.** The Settings sign-in also registers this browser as a worker
+and keeps a **device token** (a year, revocable at *Your Account*) in
+`storage.local`. Each hour the device token is exchanged for an **access token**
+kept only in `storage.session`, so closing the browser throws it away. An
+install upgraded from 2.x is not registered until somebody signs in again.
+
+**Crash safety.** A job is a list of short steps saved to `storage.session`
+after each one, so a service worker that dies — Chrome ends them freely —
+leaves a record the next one picks up. Exactly one step is the click that
+cannot be taken back. The server must say yes to it first (`commit`), the record
+says `acting` *before* the click, and a worker that finds `acting` with no result
+**never clicks again**: it reports an unknown outcome and the server sends a
+verification, which only looks. Results go into an outbox in `storage.local`
+and are resent until the web app answers; it treats a resend as the same report.
+`worker/job.js` explains each phase.
+
+**Safe defaults.** A connection's `dry_run` must be explicitly false before
+anything is submitted, and its `auto_submit` explicitly true before this browser
+presses the button; otherwise the job is rehearsed and given back, or the tab is
+brought to a person to press. (The legacy runtime defaulted both the other way
+until 3.0.)
+
+**Adapters.** A platform's page knowledge lives in `adapters/<id>/` — a
+manifest, a versioned selector file, the steps, and the page script — and the web
+app can switch a version off without touching the others. 3.0 ships one, the
+`fixture` adapter, which bills a pretend portal packaged in the extension and is
+only offered work by a connection someone made for it on purpose. The
+vendor-portal adapter is roadmap phase 9.
+
+**Tests.** `node tests/run.mjs` (Node is only the place they run — there is no
+package.json) or `tests/index.html` opened inside the extension, which also runs
+the fixture page's DOM and Chrome's real tabs. The kill loop kills the worker
+after every single storage write, request and page command of a job, and after
+random pairs of them, then lets the alarm finish: no run may submit twice. The
+web app's `tests/integration/extension_test.php` runs the same loop against the
+real worker API.
+
+**The web app's `DELIVERY_EXTENSION_VERSION` must say `3.0.0`** once this
+version is loaded, or both queues answer 426 — the legacy drain included.
 
 ## The tabs it opens
 

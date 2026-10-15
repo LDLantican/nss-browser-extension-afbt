@@ -64,6 +64,7 @@ import { api, fetch_photo, is_outdated, NetworkError } from "./api.js";
 import { notify, outdated_reason, warn_outdated } from "./notify.js";
 import { check_signed_in, remember_sign_in_tab, show_sign_in, waiting_sign_in_tab } from "./portals.js";
 import { scope_admits } from "./scope.js";
+import { from_tab_on } from "./senders.js";
 import { capture, record_tab_error } from "./tab_errors.js";
 import {
   closed_by_person,
@@ -73,7 +74,8 @@ import {
   open_owned_tab,
 } from "./owned_tabs.js";
 
-const VENDOR_ORIGIN = "https://vendor.appfolio.com";
+const VENDOR_HOST = "vendor.appfolio.com";
+const VENDOR_ORIGIN = `https://${VENDOR_HOST}`;
 const VENDOR_HOME = `${VENDOR_ORIGIN}/`;
 
 const DRAIN_ALARM = "nss-delivery-drain";
@@ -339,9 +341,13 @@ export async function deliver_now({ manual = false } = {}) {
         return { ok: false, error: "scope_unknown", summary };
       }
 
+      /* Missing or unreadable means the safe answer, as the web app's own
+         switches do: rehearse, and leave Submit to a person. Both used to
+         default the other way — a body that lost the two keys went live and
+         hands-off (docs/architecture/00-current-state.md §7). */
       const options = {
-        auto_submit: response.body?.auto_submit !== false,
-        dry_run: response.body?.dry_run === true,
+        auto_submit: response.body?.auto_submit === true,
+        dry_run: response.body?.dry_run !== false,
         on_over_limit: response.body?.on_over_limit === "send" ? "send" : "block",
         scope,
       };
@@ -1141,7 +1147,18 @@ async function report(delivery, options, reports, state, error, extra = {}) {
  * content script's fetch on vendor.appfolio.com is the *page's* request and
  * would meet CORS, the same reason every other call here lives in the worker.
  */
+const DELIVERY_MESSAGES = new Set(["DELIVERY_ABOUT_TO_SUBMIT", "DELIVERY_PHOTO", "VENDOR_PAGE_SEEN"]);
+
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  /* Only the vendor portal's own content script may say it is about to
+     submit, fetch a photo or report a page: the first of those moves a job
+     past the point where retrying may bill twice. */
+  if (DELIVERY_MESSAGES.has(message?.type) && !from_tab_on(sender, [VENDOR_HOST])) {
+    respond({ ok: false, error: "That request is only accepted from the vendor portal." });
+
+    return false;
+  }
+
   if (message?.type === "DELIVERY_ABOUT_TO_SUBMIT") {
     api
       .submitting_delivery(message.payload?.delivery_id)

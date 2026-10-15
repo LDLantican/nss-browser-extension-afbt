@@ -1,0 +1,45 @@
+body {
+  margin: 0;
+  background: #f6f6f4;
+  color: #1d1d1b;
+  font: 15px/1.5 system-ui, sans-serif;
+}
+
+.wo {
+  width: min(48rem, 100% - 2rem);
+  margin: 1rem auto;
+}
+
+.wo__banner {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: #fff4cc;
+}
+
+.panel {
+  margin-block: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #d9d9d4;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.badge {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #d8f0dc;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  text-align: left;
+}
+
+input {
+  width: 100%;
+  box-sizing: border-box;
+}

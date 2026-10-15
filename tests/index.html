@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ASH Helper tests</title>
+    <link rel="stylesheet" href="../ui/common.css" />
+    <style>
+      body { padding: 1rem; }
+      pre { white-space: pre-wrap; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <!--
+      The extension's tests, inside the extension: open
+      chrome-extension://<id>/tests/index.html. Runs every test file — the ones
+      Node runs too (node tests/run.mjs) and the ones that need a browser: the
+      fixture page's DOM, and Chrome's real tabs, tab group and messaging.
+      Opens and closes one background tab while it runs.
+    -->
+    <h1>ASH Helper tests</h1>
+    <p><button type="button" class="btn" id="run">Run again</button></p>
+    <pre id="out"></pre>
+    <script type="module" src="index.js"></script>
+  </body>
+</html>

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fixture work order</title>
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <!--
+      A pretend vendor portal, packaged with the extension so the fixture
+      adapter has somewhere to work that bills nobody. site.js is the
+      "platform" — it renders the work order and keeps the books — and
+      ../page.js is the adapter's page script, the part that would be a content
+      script on a real portal. The two share nothing but the DOM, exactly as a
+      content script and AppFolio share nothing but the DOM.
+    -->
+    <main class="wo">
+      <p class="wo__banner" data-fixture-note>Fixture site — part of the ASH Helper extension. Nothing here is real.</p>
+
+      <section class="js-signed-out" hidden>
+        <h1>Signed out</h1>
+        <button type="button" class="js-sign-in">Sign in</button>
+      </section>
+
+      <section class="js-work-order" hidden>
+        <h1>Work order <span class="js-wo-number"></span></h1>
+
+        <p>
+          <span class="js-accepted-badge badge" hidden>Accepted</span>
+          <button type="button" class="js-accept-button">Accept</button>
+        </p>
+
+        <section class="js-invoice-form panel">
+          <h2>New invoice</h2>
+
+          <table>
+            <thead>
+              <tr><th>Description</th><th>Quantity</th><th>Rate</th></tr>
+            </thead>
+            <tbody class="js-line-rows"></tbody>
+          </table>
+
+          <p><button type="button" class="js-add-line">Add Line Item</button></p>
+          <p>Total: <strong class="js-invoice-total">0.00</strong></p>
+          <p><button type="button" class="js-submit-invoice">Submit Invoice</button></p>
+        </section>
+
+        <section class="panel">
+          <h2>Submitted Invoices</h2>
+          <ul class="js-invoice-list"></ul>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="site.js"></script>
+    <script type="module" src="../page.js"></script>
+  </body>
+</html>
