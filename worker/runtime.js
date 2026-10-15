@@ -255,6 +255,17 @@ export function create_runtime(env, registry, options = {}) {
 
     is_running: () => running !== null,
 
+    /**
+     * A heartbeat and nothing else. It learns the web app's connections without
+     * claiming anything, for the import, which needs the pm connection's name
+     * and must not wait behind a job. Null when this browser is not signed in.
+     */
+    async heartbeat() {
+      if ((await client.identity()) === null) return null;
+
+      return beat();
+    },
+
     async sign_in({ email, password, device_name }) {
       const answer = await client.register({ email, password, device_name });
 

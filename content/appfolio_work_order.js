@@ -1,17 +1,20 @@
 /**
  * A single Appfolio work order, with one button and one badge.
  *
- * The same two actions as the list page, for the manager who has opened a work
- * order to read it and decided there and then. It shares the parser and the
- * status vocabulary with the list, so nothing can drift between them: this page
- * simply passes its own `document` to the parser the list page passes a fetched
- * one to.
+ * The list page's Import, for the manager who has opened a work order to read
+ * it and decided there and then. It shares the parser and the status
+ * vocabulary with the list, so nothing can drift between them: this page simply
+ * passes its own `document` to the parser the list page passes a fetched one to.
  *
  * The badge follows the same rule as the list's. It is fetched live, and if the
  * web app cannot be reached it says so rather than showing anything remembered.
- * So does the scope: both buttons refuse while it is unknown, and both say why.
- * This page is one work order rather than fifty, so the refusal can be stated
- * before anything is pressed instead of per row afterwards.
+ * So does the scope: the button refuses while it is unknown, and says why. This
+ * page is one work order rather than fifty, so the refusal can be stated before
+ * anything is pressed instead of per row afterwards.
+ *
+ * Since 3.1.0 (the web app's roadmap phase 8) the button is Import, into the
+ * new work-order system, and the "Queue for Buildertrend" button is gone; the
+ * list page's header says why.
  */
 
 (() => {
@@ -19,7 +22,6 @@
 
   const app = {
     work_order: null,
-    settings: {},
     busy: false,
 
     /** Never remembered — see the list page's header. */
@@ -32,11 +34,8 @@
       const anchor = await nss.query_element(nss.SELECTORS.detail_anchor);
       if (!anchor) return;
 
-      app.work_order = nss.parse_detail(document);
+      app.work_order = nss.parse_detail(document, "", location.href);
       if (!app.work_order) return;
-
-      const state = await nss.ask("STATE");
-      app.settings = state?.settings || {};
 
       app.render(anchor);
       app.load_status();
@@ -57,19 +56,10 @@
       const send = document.createElement("button");
       send.type = "button";
       send.className = "nss-detail__go";
-      send.disabled = app.busy;
-      send.textContent = app.busy ? "Sending…" : "Sync to web app";
+      send.disabled = true;
+      send.textContent = "Import";
       send.addEventListener("click", () => app.send());
       holder.appendChild(send);
-
-      if (app.settings.buildertrend_enabled !== false) {
-        const queue = document.createElement("button");
-        queue.type = "button";
-        queue.className = "nss-detail__link";
-        queue.textContent = "Queue for Buildertrend";
-        queue.addEventListener("click", () => app.queue_for_bt());
-        holder.appendChild(queue);
-      }
 
       const note = document.createElement("p");
       note.className = "nss-detail__note";
@@ -87,28 +77,24 @@
       note.className = `nss-detail__note nss-detail__note--${kind}`;
     },
 
-    /**
-     * Say what this page may do with this work order, and disable it if not.
-     *
-     * Both buttons are governed, Buildertrend included: a test work order
-     * imported there is a real Buildertrend job, and Buildertrend has no test
-     * mode to put it in.
-     */
+    /** Say what this page may do with this work order, and disable the button if not. */
     paint_scope() {
       const mode = app.scope?.mode === "sample" || app.scope?.mode === "live" ? app.scope.mode : null;
       const admitted = mode !== null && nss.scope_admits(app.work_order?.description, app.scope);
 
-      for (const button of document.querySelectorAll(".nss-detail__go, .nss-detail__link"))
+      for (const button of document.querySelectorAll(".nss-detail__go")) {
         button.disabled = app.busy || !admitted;
+        button.textContent = app.busy ? "Importing…" : "Import";
+      }
 
       if (admitted) return;
 
       app.say(
         mode === null
-          ? "The web app has not said which work orders it may hold, so this cannot be sent."
+          ? "The web app has not said which work orders it takes, so this cannot be imported."
           : mode === "sample"
-            ? "Sample mode is on, and this work order is not marked as a test work order."
-            : "This is a test work order, and the web app is set to real work only.",
+            ? "The connection is in test mode, and this work order is not marked as a test work order."
+            : "This is a test work order, and the connection is live.",
         "error",
       );
     },
@@ -122,39 +108,39 @@
       badge.title = title;
     },
 
+    /** "WO-000123 · Assigned · Shauna", as the list page writes it. */
+    job_label(server) {
+      const detail = [server.public_id, server.status_label || server.status];
+
+      if (server.subcontractor) detail.push(server.subcontractor);
+
+      return detail.filter(Boolean).join(" · ");
+    },
+
     async load_status() {
-      const answer = await nss.ask("STATUSES", { numbers: [app.work_order.number] });
+      const answer = await nss.ask("IMPORT_STATUSES", { numbers: [app.work_order.number] });
 
       app.scope = answer?.ok ? answer.scope || null : null;
       app.paint_scope();
 
       if (!answer?.ok) {
-        app.paint(
-          answer?.reason === "signed_out" ? "sign in for status" : "status unknown",
-          "unknown",
-          answer?.error || "",
-        );
+        app.paint(answer?.reason === "signed_out" ? "sign in for status" : "status unknown", "unknown", answer?.error || "");
+        if (answer?.error) app.say(answer.error, "error");
 
         return;
       }
 
       const server = (answer.work_orders || {})[app.work_order.number] || null;
+      const legacy = (answer.legacy || {})[app.work_order.number] || null;
 
-      if (!server) {
+      if (server) {
+        app.paint(app.job_label(server), server.status === "approved" ? "done" : "present");
+      } else if (legacy) {
+        app.paint(`in legacy · ${legacy.status_label || legacy.status}`, "legacy");
+        app.say("The old system still has this work order open, so it cannot be imported until it is finished or cancelled there.", "warn");
+      } else {
         app.paint("not imported", "absent");
-
-        return;
       }
-
-      const detail = [server.status_label || server.status];
-
-      if (server.subcontractor) detail.push(server.subcontractor);
-
-      app.paint(
-        detail.join(" · "),
-        server.status === "approved" ? "done" : "present",
-        `${server.title || ""} — ${server.street || ""}`.trim(),
-      );
     },
 
     async send() {
@@ -162,32 +148,27 @@
       if (!nss.scope_admits(app.work_order.description, app.scope)) return app.paint_scope();
 
       app.busy = true;
-      app.say("Sending…");
-      app.paint("sending…", "loading");
+      app.paint_scope();
+      app.say("Importing…");
+      app.paint("importing…", "loading");
 
-      const result = await nss.ask("SYNC", { work_orders: [app.work_order] });
+      const answer = await nss.ask("IMPORT", { records: [app.work_order] });
+      const result = (answer?.results || [])[0] || null;
 
       app.busy = false;
+      app.paint_scope();
 
-      app.say(
-        result?.queued > 0
-          ? "Sent to the web app."
-          : result?.error || "That could not be sent.",
-        result?.queued > 0 ? "ok" : "error",
-      );
+      const said = {
+        created: ["Imported.", "ok"],
+        refreshed: ["Already imported; AppFolio's description or unit was newer, and the web app now has it.", "ok"],
+        unchanged: ["Already imported, and nothing had changed.", "ok"],
+      }[result?.status];
 
-      /* Ask the web app what it has rather than reporting what we sent — the
-         same rule the ledger's reconcile step follows. */
-      setTimeout(() => app.load_status(), 1200);
-    },
+      if (said) app.say(...said);
+      else app.say((result?.errors || [])[0] || answer?.error || "That could not be imported.", "error");
 
-    async queue_for_bt() {
-      if (!app.work_order) return;
-      if (!nss.scope_admits(app.work_order.description, app.scope)) return app.paint_scope();
-
-      await nss.ask("QUEUE_FOR_BT", { work_orders: [app.work_order] });
-
-      app.say("Added to the Buildertrend queue. Open the extension to run it.", "ok");
+      /* Ask the web app what it has rather than reporting what we sent. */
+      setTimeout(() => app.load_status(), 600);
     },
   };
 

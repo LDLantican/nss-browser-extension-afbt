@@ -121,7 +121,7 @@
    * from the city line with a <br>, which textContent would run together into
    * "123 Main StBirmingham, AL 35203".
    */
-  function parse_detail(doc, fallback_number = "") {
+  function parse_detail(doc, fallback_number = "", url = "") {
     const body = doc.querySelector(SELECTORS.detail_body);
 
     const number =
@@ -135,6 +135,7 @@
       ?.querySelector(SELECTORS.detail_address);
 
     let street = "";
+    let unit = "";
     let city = "";
     let state = "";
     let zip = "";
@@ -156,6 +157,12 @@
           city = parts.city;
           state = parts.state;
           zip = parts.zip;
+
+          /* Whatever sat between the street and the city line is the unit.
+             It used to be dropped; the import keeps it (phase 8). The web
+             app's unit is 32 characters, so a longer second line is cut
+             there rather than refusing the whole work order. */
+          unit = lines.slice(1, index).join(", ").slice(0, 32);
           break;
         }
       }
@@ -164,11 +171,39 @@
     return {
       number,
       street,
+      unit,
       city,
       state,
       zip,
       description: text_of(body || doc, SELECTORS.detail_description),
+      url: page_url(url),
+      native_id: native_id_of(url),
     };
+  }
+
+  /**
+   * AppFolio's own id for a work order, out of its page's address
+   * (`…/service_requests/18094/work_orders/18662`). The import keeps it on
+   * the link as the strongest identity there is (plan section C). The number
+   * a person reads, `18094-2`, can be typed into another work order; this id
+   * cannot.
+   */
+  function native_id_of(url) {
+    const match = String(url || "").match(/\/work_orders\/(\d+)(?:[/?#]|$)/);
+
+    return match ? match[1] : "";
+  }
+
+  /** The page's address without its query or fragment, for a person to click from the web app; https only. */
+  function page_url(url) {
+    try {
+      const parsed = new URL(String(url || ""));
+      if (parsed.protocol !== "https:") return "";
+
+      return `${parsed.origin}${parsed.pathname}`;
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -222,7 +257,7 @@
 
     const html = await response.text();
     const doc = new DOMParser().parseFromString(html, "text/html");
-    const work_order = parse_detail(doc, fallback_number);
+    const work_order = parse_detail(doc, fallback_number, response.url || href);
 
     if (!work_order)
       throw new Error("Could not read that work order's details from Appfolio.");
@@ -262,10 +297,13 @@
       return {
         number: row.number,
         street: collapse(address.textContent || ""),
+        unit: "",
         city: parts.city,
         state: parts.state,
         zip: parts.zip,
         description: text_of(row.element, "[aria-label='Description']"),
+        url: "",
+        native_id: "",
       };
     } finally {
       /* Collapse it again whatever happened, so a failed read does not leave
@@ -274,11 +312,19 @@
     }
   }
 
-  /** One work order, by whichever route the row allows. */
+  /**
+   * One work order, by whichever route the row allows.
+   *
+   * The row's own select box is the fallback for AppFolio's id: its `id` is
+   * that id (see SELECTORS.row_select), which is why it may never be used to
+   * match a box to a number, and why it may be used here.
+   */
   async function scrape_row(row) {
-    if (row.href !== "") return fetch_detail(row.href, row.number);
+    const work_order = row.href !== "" ? await fetch_detail(row.href, row.number) : await scrape_row_in_place(row);
 
-    return scrape_row_in_place(row);
+    if (work_order.native_id === "" && /^\d+$/.test(row.box?.id || "")) work_order.native_id = row.box.id;
+
+    return work_order;
   }
 
   /** Poll until a thing exists, or give up. Used only where a click precedes it. */
@@ -408,6 +454,7 @@
     text_of,
     split_city_state_zip,
     parse_detail,
+    native_id_of,
     list_rows,
     fetch_detail,
     scrape_row,

@@ -15,7 +15,7 @@
  * counter and their Bulk Actions menu — so every row carried two boxes a
  * thumb's width apart, and ours sat at the bottom edge of the card where it
  * read as nearly belonging to the next work order. A manager cannot be expected
- * to know which of two identical controls means "sync" and which one is next to
+ * to know which of two identical controls means "import" and which one is next to
  * "Cancel", so there is now only one, and it is hers.
  *
  * So the selection is not state here. It is read off the page at the moment it
@@ -36,7 +36,7 @@
  * out, every row says "status unknown" and offers a retry.
  *
  * That is deliberate and it is the whole reason the badges are trustworthy. A
- * manager decides whether to sync a row by reading it, so a badge that might be
+ * manager decides whether to import a row by reading it, so a badge that might be
  * an hour stale is worse than a badge that admits it does not know — the first
  * causes a wrong decision quietly and the second causes a click.
  *
@@ -53,6 +53,30 @@
  * the badges recovers both at once. The cost is a click; the alternative is a
  * real client's work order posted to a machine that only wanted tests, or the
  * reverse.
+ *
+ * ## Import, which replaced Sync (3.1.0, the web app's roadmap phase 8)
+ *
+ * The button used to be "Sync", which put work orders into the web app's
+ * legacy tables and queued each one for Buildertrend. It is now **Import**:
+ * the ticked rows go to the new work-order system, through this browser's
+ * delivery-worker sign-in (worker/imports.js), on the property-manager
+ * connection the web app names. The owner chose to replace Sync rather than
+ * sit beside it.
+ *
+ * - **The mode is the connection's.** Test or live is now decided by that
+ *   connection, not by the installation-wide setting legacy reads. The bar
+ *   says which, as it always did.
+ * - **A badge says what the new system holds:** the job's WO- number and
+ *   status, "in legacy" for a number the old system still has open (the
+ *   import refuses those, so one job is never tracked twice), or "not
+ *   imported".
+ * - **Buildertrend is no longer queued from here.** Recording a Buildertrend
+ *   job against a work order is a legacy feature, keyed on the legacy tables,
+ *   and the new system has no Buildertrend adapter. Its queue and its runner
+ *   are untouched; only the automatic queueing from this page went.
+ * - **Re-importing is safe.** A number the new system already holds is
+ *   refreshed (its description and unit brought up to date), never doubled;
+ *   one whose street changed is flagged for a person and left alone.
  */
 
 (() => {
@@ -72,7 +96,7 @@
 
     message: null,
 
-    /** Set while a sync is in flight, so the bar cannot be double-fired. */
+    /** Set while an import is in flight, so the bar cannot be double-fired. */
     busy: false,
 
     /**
@@ -185,7 +209,7 @@
      * bubbles to our own listener too, which is why on_click() ignores anything
      * that is not `isTrusted`.
      *
-     * What this was leaving behind: after every sync, the rows the extension
+     * What this was leaving behind: after every send, the rows the extension
      * had just cleared stayed in Appfolio's count and in its Bulk Actions
      * selection — a menu whose items are Complete, Ready to Bill, Assign,
      * Cancel and Print.
@@ -282,7 +306,7 @@
 
       app.paint_badges("checking…", "loading");
 
-      const answer = await nss.ask("STATUSES", { numbers });
+      const answer = await nss.ask("IMPORT_STATUSES", { numbers });
 
       app.scope = answer?.ok ? answer.scope || null : null;
 
@@ -290,42 +314,63 @@
         /* The honest state. Not a cached value, not a blank — the row says it
            does not know, and says so identically for every row so a manager
            cannot mistake one for a real answer. */
-        app.paint_badges(
-          answer?.reason === "signed_out" ? "sign in for status" : "status unknown",
-          "unknown",
-          answer?.error || "",
-        );
-
+        app.paint_badges(app.unknown_label(answer), "unknown", answer?.error || "");
         app.render_bar(answer);
 
         return;
       }
 
       const found = answer.work_orders || {};
+      const legacy = answer.legacy || {};
 
       for (const number of numbers) {
         const server = found[number] || null;
 
-        if (!server) {
-          app.paint_badge(number, "not imported", "absent");
+        if (server) {
+          app.paint_badge(number, app.job_label(server), server.status === "approved" ? "done" : "present");
 
           continue;
         }
 
-        const detail = [server.status_label || server.status];
+        if (legacy[number]) {
+          app.paint_badge(
+            number,
+            `in legacy · ${legacy[number].status_label || legacy[number].status}`,
+            "legacy",
+            "The old system still has this work order open, so it cannot be imported until it is finished or cancelled there.",
+          );
 
-        if (server.subcontractor) detail.push(server.subcontractor);
-        else if ((server.line_count || 0) > 0) detail.push(`${server.line_count} lines`);
+          continue;
+        }
 
-        app.paint_badge(
-          number,
-          detail.join(" · "),
-          server.status === "approved" ? "done" : "present",
-          `${server.title || number} — ${server.street || ""}`.trim(),
-        );
+        app.paint_badge(number, "not imported", "absent");
       }
 
       app.render_bar(answer);
+    },
+
+    /** "WO-000123 · Assigned · Shauna": what the new system calls it and where it stands. */
+    job_label(server) {
+      const detail = [server.public_id, server.status_label || server.status];
+
+      if (server.subcontractor) detail.push(server.subcontractor);
+      else if ((server.lines || 0) > 0) detail.push(`${server.lines} lines`);
+
+      return detail.filter(Boolean).join(" · ");
+    },
+
+    /** Why nothing is known, in the fewest words a badge can hold. */
+    unknown_label(answer) {
+      switch (answer?.reason) {
+        case "signed_out": return "sign in for status";
+        case "connection_disabled":
+        case "connection_paused":
+        case "import_disabled": return "import is off";
+        case "no_connection": return "no AppFolio connection";
+        case "outdated": return "extension out of date";
+        case "forbidden": return "not permitted";
+        default: return "status unknown";
+      }
     },
 
     paint_badge(number, label, kind, title = "") {
@@ -361,7 +406,6 @@
       if (status_answer !== undefined) bar.dataset.statusError = status_answer?.ok ? "" : "1";
 
       const count = app.selected_rows().length;
-      const bt = app.settings.buildertrend_enabled !== false;
       const mode = app.scope?.mode === "sample" || app.scope?.mode === "live" ? app.scope.mode : null;
 
       bar.innerHTML = "";
@@ -376,7 +420,7 @@
       tally.className = "nss-bar__count";
       tally.textContent =
         count === 0
-          ? `${app.rows.size} work orders on this page — tick rows to sync`
+          ? `${app.rows.size} work orders on this page — tick rows to import`
           : `${count} selected`;
 
       left.appendChild(tally);
@@ -389,15 +433,15 @@
       scope.className = `nss-bar__scope nss-bar__scope--${mode || "unknown"}`;
       scope.textContent =
         mode === "sample"
-          ? "sample mode — test work orders only"
+          ? "test mode — test work orders only"
           : mode === "live"
             ? "live — real work orders only"
             : "mode unknown";
       scope.title =
         mode === null
-          ? "The web app has not said which work orders it may hold, so nothing can be sent."
+          ? "The web app has not said which work orders it takes, so nothing can be imported."
           : `Only work orders whose description ${mode === "sample" ? "carries" : "does not carry"} `
-            + `"${app.scope.marker || ""}" will be accepted.`;
+            + `"${app.scope.marker || ""}" will be imported.`;
 
       left.appendChild(scope);
 
@@ -413,21 +457,6 @@
       const right = document.createElement("div");
       right.className = "nss-bar__right";
 
-      /* There used to be an "also queue for Buildertrend" checkbox here, and it
-         was the wrong shape twice over: it made the second destination optional
-         when a job has to exist in both, and its state lived only in the bar's
-         dataset, so it reset on every re-render and every page change. A
-         manager who ticked it, sorted the list, and pressed Sync got the web
-         app and nothing else.
-
-         Syncing now means both. This says so, rather than asking. */
-      if (bt) {
-        const also = document.createElement("span");
-        also.className = "nss-bar__also";
-        also.textContent = "and Buildertrend";
-        right.appendChild(also);
-      }
-
       const send = document.createElement("button");
       send.type = "button";
       send.className = "nss-bar__go";
@@ -435,10 +464,10 @@
       send.textContent = app.busy
         ? "Reading Appfolio…"
         : mode === null
-          ? "Mode unknown — cannot sync"
+          ? "Mode unknown — cannot import"
           : count === 0
-            ? "Sync"
-            : `Sync ${count}`;
+            ? "Import"
+            : `Import ${count}`;
 
       send.addEventListener("click", () => app.send());
       right.appendChild(send);
@@ -471,8 +500,8 @@
       const rows = count === 1 ? "1 is" : `${count} are`;
 
       return app.scope?.mode === "sample"
-        ? `${rows} not marked as a test work order, and sample mode is on.`
-        : `${rows} a test work order, and this web app is set to real work only.`;
+        ? `${rows} not marked as a test work order, and the connection is in test mode.`
+        : `${rows} a test work order, and the connection is live.`;
     },
 
     /* ---- sending --------------------------------------------------------- */
@@ -532,8 +561,8 @@
               app.scope.mode === "sample" ? "not a test work order" : "test work order",
               "error",
               app.scope.mode === "sample"
-                ? "Sample mode is on, so only work orders whose description carries the test marker are sent."
-                : "This is a test work order, and this web app is set to real work only.",
+                ? "The connection is in test mode, so only work orders whose description carries the test marker are imported."
+                : "This is a test work order, and the connection is live.",
             );
 
             continue;
@@ -560,48 +589,83 @@
         return;
       }
 
-      const result = await nss.ask("SYNC", { work_orders });
-
-      /* Both destinations, every time. The web app first because it is the
-         system of record and the fast, reliable half — if Buildertrend then
-         fails, the gap is recorded rather than lost, and `buildertrend_url IS
-         NULL` on the server is what names it.
-
-         Not awaited: the run opens a tab and works through the queue one job at
-         a time, which takes minutes for a full page of rows. Holding the bar
-         busy for that would stop a manager doing anything else in Appfolio, and
-         the queue is durable — a browser closed mid-run picks up where it left
-         off. The notification at the end is the report. */
-      if (app.settings.buildertrend_enabled !== false) {
-        await nss.ask("QUEUE_FOR_BT", { work_orders });
-        nss.ask("RUN_BT_QUEUE");
-      }
+      const answer = await nss.ask("IMPORT", { records: work_orders });
 
       app.busy = false;
 
-      /* Cleared only for the rows that were actually handed over. A row that
-         could not be read stays ticked, because it still needs doing and
-         un-ticking it would hide that. */
-      for (const row of handed_over) app.set_checked(row, false);
+      /* Each row says what became of it, from the server's own answer. A row
+         the server took, or already had, is unticked. One it refused stays
+         ticked, because it still needs a person and un-ticking it would hide
+         that. */
+      const outcome = { done: 0, problems: [] };
 
-      const sent = result?.queued ?? work_orders.length;
-      const notes = [`${sent} sent to the web app.`];
+      for (const result of answer?.results || []) {
+        const row = handed_over[result.index];
+        if (!row) continue;
 
+        const painted = app.paint_result(row.number, result);
+        if (painted.done) {
+          outcome.done++;
+          app.set_checked(row, false);
+        } else {
+          outcome.problems.push(`${row.number}: ${painted.why}`);
+        }
+      }
+
+      /* Records the server never answered for: the request was refused whole,
+         or stopped part-way. Their rows stay ticked, to be pressed again. */
+      const answered = new Set((answer?.results || []).map((result) => result.index));
+      handed_over.forEach((row, index) => {
+        if (!answered.has(index)) app.paint_badge(row.number, "not sent", "error", answer?.error || "");
+      });
+
+      const notes = [];
+
+      if (outcome.done > 0) notes.push(`${outcome.done} imported.`);
+      if (!answer?.ok) notes.push(answer?.error || "The web app did not answer.");
+      if (outcome.problems.length > 0) notes.push(`Not imported — ${outcome.problems.join("; ")}.`);
       if (refused.length > 0) notes.push(app.refusal_reason(refused.length) + ` ${refused.join(", ")}.`);
       if (failed.length > 0) notes.push(`${failed.length} could not be read: ${failed.join(", ")}.`);
 
-      notes.push(
-        refused.length === 0 && failed.length === 0
-          ? "Watch the toolbar icon for the result."
-          : "Anything not sent is still selected.",
-      );
+      const clean = answer?.ok && outcome.problems.length === 0 && refused.length === 0 && failed.length === 0;
+      if (!clean) notes.push("Anything not imported is still selected.");
 
-      app.say(notes.join(" "), refused.length === 0 && failed.length === 0 ? "ok" : "warn");
+      app.say(notes.join(" "), clean ? "ok" : outcome.done > 0 ? "warn" : "error");
+    },
 
-      /* Re-read from the web app rather than assuming the send worked. The
-         badges then show what the app actually holds, which is the same
-         principle the sync ledger's reconcile step runs on. */
-      setTimeout(() => app.load_statuses(), 1200);
+    /**
+     * Paint one row with what the server did with it, and say whether that
+     * row is finished with.
+     *
+     * @return {{done: boolean, why: string}}
+     */
+    paint_result(number, result) {
+      const job = result.work_order || null;
+      const why = (result.errors || [])[0] || "";
+
+      switch (result.status) {
+        case "created":
+          app.paint_badge(number, `imported · ${app.job_label(job || {})}`, "present");
+          return { done: true, why: "" };
+        case "refreshed":
+          app.paint_badge(number, `updated · ${app.job_label(job || {})}`, "present", "AppFolio's description or unit had changed, and the web app now has it.");
+          return { done: true, why: "" };
+        case "unchanged":
+          app.paint_badge(number, `already imported · ${app.job_label(job || {})}`, "present");
+          return { done: true, why: "" };
+        case "flagged":
+          app.paint_badge(number, "address differs — not changed", "error", why);
+          return { done: false, why: "its address differs from the job already imported" };
+        case "legacy":
+          app.paint_badge(number, "in legacy", "legacy", why);
+          return { done: false, why: "still open in the legacy system" };
+        case "out_of_scope":
+          app.paint_badge(number, app.scope?.mode === "sample" ? "not a test work order" : "test work order", "error", why);
+          return { done: false, why: why || "outside the connection's mode" };
+        default:
+          app.paint_badge(number, "refused", "error", (result.errors || []).join(" "));
+          return { done: false, why: why || "refused" };
+      }
     },
 
     /* ---- the page is a SPA ----------------------------------------------- */

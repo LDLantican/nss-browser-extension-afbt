@@ -73,6 +73,36 @@ project shares `http://localhost` and differs only by path. Dropping a trailing
 slash is normalized away and does not count as a change. Saving the Buildertrend
 settings never signs anybody out.
 
+## Importing (3.1)
+
+**Since 3.1.0 the AppFolio work-order list imports; it no longer syncs.** The
+button at the bottom of the list, and the one on a single work order's page, is
+**Import**. It sends the ticked work orders to the web app's new work-order
+system, through the delivery-worker sign-in (`worker/imports.js`), on the
+property-manager connection the web app names. Legacy Sync, and the
+Buildertrend job it queued for each row, are no longer started from AppFolio's
+pages. Recording a Buildertrend job is keyed on the web app's legacy tables, and
+the new system has no Buildertrend adapter. The Buildertrend queue, its runner
+and everything in the popup are unchanged.
+
+- **The connection decides test or live.** Each property-manager connection in
+  the web app is in `test` or `live` mode. In test mode only Dustin's test work
+  orders are imported; in live mode only real ones. The bar states it, and a
+  row the mode does not take is refused on the page and again by the web app.
+- **Badges show what the new system holds:** `WO-000123 · Assigned · Shauna`,
+  *in legacy* for a number the old system still has open (the import refuses
+  those, so one job is never tracked in both), or *not imported*.
+- **Importing again is safe.** A number the web app already holds is refreshed
+  (its description and unit), never doubled. One whose street changed is flagged
+  *address differs* and left for a person.
+- **It needs the delivery-worker sign-in.** Signing in from Settings does both.
+  Without it every badge says *sign in for status*. Anyone with permission to add
+  work orders in the web app may import.
+
+The sections below describe Sync and the Buildertrend leg as they worked
+before 3.1. They still describe the popup's Buildertrend queue and the legacy
+delivery drain, which are unchanged.
+
 ## Using it
 
 **Syncing writes to both places.** Ticked rows go to the web app first — it is
@@ -260,8 +290,8 @@ random pairs of them, then lets the alarm finish: no run may submit twice. The
 web app's `tests/integration/extension_test.php` runs the same loop against the
 real worker API.
 
-**The web app's `DELIVERY_EXTENSION_VERSION` must say `3.0.0`** once this
-version is loaded, or both queues answer 426 — the legacy drain included.
+**The web app's `DELIVERY_EXTENSION_VERSION` must say `3.1.0`** once this
+version is loaded, or both queues and the import answer 426 — the legacy drain included.
 
 ## The tabs it opens
 

@@ -50,7 +50,7 @@
   text-overflow: ellipsis;
 }
 
-/* Six states, and the colours carry the meaning rather than decorating it.
+/* Seven states, and the colours carry the meaning rather than decorating it.
    `unknown` is the important one: grey and italic, so a row that cannot be
    checked reads as an absence and can never be mistaken for a real answer. */
 .nss-badge--loading {
@@ -98,6 +98,14 @@
   background: #fef2f2;
   border-color: #fca5a5;
   color: #7f1d1d;
+}
+
+/* Still worked in the legacy system, so the import refuses it (phase 8). Not an
+   error and not ours: amber, the colour of "somewhere else has this". */
+.nss-badge--legacy {
+  background: #fffbeb;
+  border-color: #fcd34d;
+  color: #78350f;
 }
 
 /* ---- the action bar ------------------------------------------------------ */
@@ -180,15 +188,6 @@
   color: #fff;
 }
 
-.nss-bar__also {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  cursor: pointer;
-  color: #d4d4d4;
-}
-
 .nss-bar__go {
   padding: 8px 16px;
   border: 0;
@@ -269,16 +268,6 @@
   cursor: default;
 }
 
-.nss-detail__link {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: #7f1d1d;
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
 .nss-detail__note {
   flex-basis: 100%;
   margin: 0;
@@ -292,4 +281,8 @@
 
 .nss-detail__note--error {
   color: #7f1d1d;
+}
+
+.nss-detail__note--warn {
+  color: #78350f;
 }

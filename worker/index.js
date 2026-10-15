@@ -13,8 +13,9 @@
  * once rather than waiting for the alarm, because that job holds a lease.
  */
 
-import { from_extension_page } from "../background/senders.js";
+import { from_extension_page, from_tab_on } from "../background/senders.js";
 import { create_chrome_env } from "./chrome_env.js";
+import { create_imports } from "./imports.js";
 import { JOB_KEY } from "./job.js";
 import { create_registry } from "./registry.js";
 import { create_runtime } from "./runtime.js";
@@ -23,6 +24,17 @@ const ALARM = "ash-worker-tick";
 
 const env = create_chrome_env();
 const runtime = create_runtime(env, create_registry());
+const imports = create_imports({ env, client: runtime.rt.client, refresh: () => runtime.heartbeat() });
+
+/**
+ * The two messages a content script may send here, and from where: the
+ * property manager's AppFolio pages, which is where the Import button is.
+ * Everything else in this file answers only the extension's own pages.
+ */
+const PAGE_MESSAGES = {
+  IMPORT_STATUSES: ["*.appfolio.com"],
+  IMPORT: ["*.appfolio.com"],
+};
 
 export function start_worker_schedule() {
   chrome.alarms.create(ALARM, { periodInMinutes: 1 });
@@ -75,15 +87,27 @@ const handlers = {
 
     return runtime.state();
   },
+
+  /* The AppFolio import (phase 8): the rows' status, and the rows themselves. */
+  IMPORT_STATUSES: ({ numbers }) => imports.lookup(Array.isArray(numbers) ? numbers : []),
+  IMPORT: ({ records }) => imports.send(Array.isArray(records) ? records : []),
 };
+
+function sender_allowed(type, sender) {
+  if (from_extension_page(sender)) return true;
+
+  const hosts = PAGE_MESSAGES[type];
+
+  return hosts !== undefined && from_tab_on(sender, hosts);
+}
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   const handler = handlers[message?.type];
 
   if (!handler) return false;
 
-  if (!from_extension_page(sender)) {
-    respond({ ok: false, error: "That request is only accepted from the extension's own pages." });
+  if (!sender_allowed(message.type, sender)) {
+    respond({ ok: false, error: "That request is not accepted from this page." });
 
     return false;
   }

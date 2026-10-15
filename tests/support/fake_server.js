@@ -40,6 +40,28 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
       on_over_limit: "block",
       cap: 2,
     },
+    /**
+     * The property manager's AppFolio, for the import (phase 8). It is listed
+     * by the heartbeat like any connection and never claimable (no delivery
+     * runs on it); imports and their lookup go through it.
+     */
+    pm: {
+      id: 2,
+      slug: "camelot-pm-test",
+      name: "Camelot AppFolio (test)",
+      platform: "appfolio",
+      role: "pm",
+      adapter: "appfolio_pm",
+      enabled: true,
+      paused: false,
+      import_enabled: true,
+      scope: "test",
+    },
+    marker: "This is a test work order approved by Dustin.",
+    /** number => the job an import made, and numbers legacy still has open. */
+    imported: new Map(),
+    legacy: new Map(),
+    next_job: 1,
     killed_adapters: [],
     deliveries: [],
     reports: new Map(),
@@ -109,6 +131,62 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
     d.token = null;
     d.worker_id = ["claimed", "committing"].includes(status) ? d.worker_id : null;
     Object.assign(d, fields);
+  }
+
+  /**
+   * The import's two endpoints (docs/worker-api.md, "Importing"): the
+   * connection's gates, its scope by the marker, created or unchanged by
+   * number, legacy refused. Enough of the web app's rules for the extension
+   * to be unable to tell; the rules themselves are proven in the web app's
+   * tests/integration/import_test.php.
+   */
+  function imports(path, body) {
+    const pm = server.pm;
+
+    if (body.connection !== pm.slug) return [422, { error: `There is no connection called “${body.connection}”.` }];
+    if (!pm.enabled) return [409, { error: `${pm.name} is switched off.`, reason: "connection_disabled" }];
+    if (!pm.import_enabled) return [409, { error: `Importing is switched off for ${pm.name}.`, reason: "import_disabled" }];
+
+    const job = (number) => server.imported.get(number);
+
+    if (path.endsWith("/lookup")) {
+      const work_orders = {};
+      const legacy = {};
+
+      for (const number of body.numbers || []) {
+        if (job(number)) work_orders[number] = job(number);
+        else if (server.legacy.has(number)) legacy[number] = { status: "assigned", status_label: "Assigned" };
+      }
+
+      return [200, { connection: pm.slug, scope: pm.scope, marker: server.marker, work_orders, legacy }];
+    }
+
+    if (!Array.isArray(body.records)) return [400, { error: "Send the work orders as a list." }];
+    if (body.records.length > 100) return [413, { error: "Send at most 100.", max: 100 }];
+
+    const counts = {};
+    const results = body.records.map((record, index) => {
+      const number = String(record?.number || "");
+      const marked = String(record?.description || "").includes(server.marker);
+      let result;
+
+      if (number === "" || String(record?.street || "") === "") result = { status: "invalid", errors: ["Number and Street are required."] };
+      else if (marked !== (pm.scope === "test")) result = { status: "out_of_scope", errors: ["Not this connection's mode."] };
+      else if (job(number)) result = { status: "unchanged", work_order: job(number) };
+      else if (server.legacy.has(number)) result = { status: "legacy", errors: [`Work order ${number} is still open in the legacy system.`] };
+      else {
+        const public_id = `WO-${String(server.next_job++).padStart(6, "0")}`;
+
+        server.imported.set(number, { id: server.next_job, public_id, status: "unassigned", status_label: "Unassigned", subcontractor: null, lines: 0, record });
+        result = { status: "created", work_order: job(number) };
+      }
+
+      counts[result.status] = (counts[result.status] || 0) + 1;
+
+      return { index, number, ...result };
+    });
+
+    return [200, { connection: pm.slug, scope: pm.scope, results, counts }];
   }
 
   function bearer(headers) {
@@ -351,12 +429,20 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
               id: c.id, slug: c.slug, name: c.name, adapter: c.adapter, enabled: c.enabled, paused: c.paused,
               scope: c.scope, dry_run: c.dry_run, auto_submit: c.auto_submit, claimable: reason === null, reason,
             },
+            {
+              id: server.pm.id, slug: server.pm.slug, name: server.pm.name, adapter: server.pm.adapter,
+              enabled: server.pm.enabled, paused: server.pm.paused, scope: server.pm.scope,
+              dry_run: true, auto_submit: false, claimable: false, reason: "adapter_not_reported",
+            },
           ],
         },
       ];
     }
 
     if (path === "/api/worker/claim") return gated() || (person.can_deliver ? claim(worker) : [403, {}]);
+
+    if (path === "/api/worker/imports" || path === "/api/worker/imports/lookup")
+      return gated() || (person.can_create === false ? [403, { error: "No." }] : imports(path, body));
 
     const match = /^\/api\/worker\/deliveries\/(\d+)\/(\w+)$/.exec(path);
 

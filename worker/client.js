@@ -230,5 +230,9 @@ export function create_client(env) {
     complete: (id, report) => call(delivery(id, "complete"), report),
     fail: (id, report) => call(delivery(id, "fail"), report),
     release: (id, claim_token) => call(delivery(id, "release"), { claim_token }),
+
+    /* The AppFolio import (phase 8): not deliveries, but the same credentials. */
+    import_records: (connection, records) => call("/api/worker/imports", { connection, records }),
+    import_lookup: (connection, numbers) => call("/api/worker/imports/lookup", { connection, numbers }),
   };
 }

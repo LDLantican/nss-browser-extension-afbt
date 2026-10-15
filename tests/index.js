@@ -9,6 +9,7 @@ const FILES = [
   "adapters/chrome_env_test.js",
   "adapters/fixture_page_test.js",
   "worker/client_test.js",
+  "worker/import_test.js",
   "worker/kill_loop_test.js",
   "worker/runtime_test.js",
 ];
