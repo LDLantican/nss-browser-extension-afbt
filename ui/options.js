@@ -71,6 +71,7 @@ const els = {
   estimates_now: document.getElementById("estimates-now"),
   run_output: document.getElementById("run-output"),
   probe: document.getElementById("probe"),
+  stop_after_press: document.getElementById("stop-after-press"),
   probe_copy: document.getElementById("probe-copy"),
   probe_output: document.getElementById("probe-output"),
   bt_troubleshooting: document.getElementById("bt-troubleshooting"),
@@ -575,11 +576,29 @@ els.probe.addEventListener("click", () =>
     }
 
     say("");
-    show_output(els.probe_output, describe_probe(result.report || {}));
+
+    const adapter = result.report?.adapter;
+    const adapter_text = adapter
+      ? [
+          "",
+          `appfolio_vendor adapter (3.2), ${adapter.kind} page, ${adapter.signed_in ? "signed in" : "signed out"}`,
+          `  found:   ${adapter.found.join(", ") || "nothing"}`,
+          `  missing: ${adapter.missing.join(", ") || "nothing"}`,
+        ].join(NEWLINE)
+      : `${NEWLINE}appfolio_vendor adapter (3.2): the page did not answer. Reload it and check again.`;
+
+    show_output(els.probe_output, describe_probe(result.report || {}) + NEWLINE + adapter_text);
     els.probe_copy.hidden = false;
   }));
 
 els.probe_copy.addEventListener("click", () => copy(els.probe_output.textContent, "Page check"));
+
+els.stop_after_press.addEventListener("click", () =>
+  busy(els.stop_after_press, "Arming…", async () => {
+    const result = await ask("WORKER_STOP_AFTER_NEXT_PRESS");
+
+    say(result.ok === false ? result.error || "Could not arm it." : "Armed: the next press is followed by a stop.", result.ok === false ? "warn" : "ok");
+  }));
 
 /* ---- troubleshooting: Buildertrend ----------------------------------------- */
 

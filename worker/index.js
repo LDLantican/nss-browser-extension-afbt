@@ -15,8 +15,9 @@
 
 import { from_extension_page, from_tab_on } from "../background/senders.js";
 import { create_chrome_env } from "./chrome_env.js";
+import { SESSION_KEY as VENDOR_SESSION_KEY } from "../adapters/appfolio_vendor/adapter.js";
 import { create_imports } from "./imports.js";
-import { JOB_KEY } from "./job.js";
+import { JOB_KEY, STOP_AFTER_PRESS_KEY } from "./job.js";
 import { create_registry } from "./registry.js";
 import { create_runtime } from "./runtime.js";
 
@@ -34,6 +35,7 @@ const imports = create_imports({ env, client: runtime.rt.client, refresh: () => 
 const PAGE_MESSAGES = {
   IMPORT_STATUSES: ["*.appfolio.com"],
   IMPORT: ["*.appfolio.com"],
+  ASH_VENDOR_SEEN: ["vendor.appfolio.com"],
 };
 
 export function start_worker_schedule() {
@@ -88,9 +90,27 @@ const handlers = {
     return runtime.state();
   },
 
+  /* Troubleshooting: stop dead after the next press (worker/job.js says why). */
+  async WORKER_STOP_AFTER_NEXT_PRESS() {
+    await env.local.set(STOP_AFTER_PRESS_KEY, 1);
+
+    return { ok: true };
+  },
+
   /* The AppFolio import (phase 8): the rows' status, and the rows themselves. */
   IMPORT_STATUSES: ({ numbers }) => imports.lookup(Array.isArray(numbers) ? numbers : []),
   IMPORT: ({ records }) => imports.send(Array.isArray(records) ? records : []),
+
+  /* A vendor-portal page loaded in this browser, and said whether it is
+     signed in (adapters/appfolio_vendor/page.js). Kept as the adapter's
+     cached session, so a person's own browsing spares a probe tab. */
+  async ASH_VENDOR_SEEN({ state, account }) {
+    if (state !== "live" && state !== "expired") return { ok: false };
+
+    await env.local.set(VENDOR_SESSION_KEY, { state, account: /^\d+$/.test(String(account || "")) ? String(account) : null, at: env.now() });
+
+    return { ok: true };
+  },
 };
 
 function sender_allowed(type, sender) {

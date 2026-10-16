@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AppFolio Vendor Portal (fixture)</title>
+    <link rel="stylesheet" href="portal.css" />
+  </head>
+  <body>
+    <!--
+      A pretend AppFolio vendor portal, packaged with the extension so the
+      appfolio_vendor page script can be tested where there is a DOM, and bill
+      nobody. site.js is the "portal": it renders the list, a work order, its
+      notes and its invoices from the books in portal.js, with the markup and
+      `js-*` hooks read off the live portal on 2026-10-16 (structure only).
+      The route is the hash, because an extension page cannot have AppFolio's
+      paths. ../selectors.v1.js and ../page.js are the adapter's page script,
+      exactly as the manifest injects them on vendor.appfolio.com.
+    -->
+    <nav class="js-navbar navbar"><span class="navbar-brand">AppFolio Vendor Portal — fixture, nothing here is real</span></nav>
+    <main id="property-content"></main>
+
+    <script type="module" src="site.js"></script>
+    <script src="../selectors.v1.js"></script>
+    <script src="../page.js"></script>
+  </body>
+</html>

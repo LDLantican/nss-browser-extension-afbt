@@ -308,7 +308,17 @@ const handlers = {
     try {
       const report = await chrome.tabs.sendMessage(tab.id, { type: "VENDOR_PAGE_PROBE" });
 
-      return { ok: true, report: { ...report, tab_title: tab.title || tab.url || "" } };
+      /* The 3.2 adapter's own page script reads the same page with its own
+         hooks (adapters/appfolio_vendor/selectors.v1.js): step 0 of its
+         rollout ladder. Read-only too; a page without it simply says so. */
+      const adapter = await chrome.tabs
+        .sendMessage(tab.id, { type: "ASH_PAGE_COMMAND", command: "probe", args: {} })
+        .catch(() => null);
+
+      return {
+        ok: true,
+        report: { ...report, tab_title: tab.title || tab.url || "", adapter: adapter?.ok ? adapter.result : null },
+      };
     } catch {
       return {
         ok: false,

@@ -18,7 +18,9 @@
  *   operations                  per operation: entity, commit_step, and the
  *                               idempotent / verifiable / negative_verify_trusted
  *                               flags, mirrored on the server
- *   session(env, connection)    { state: live|expired|unknown, account_hint }
+ *   session(env, connection, { processing })
+ *                               { state: live|expired|unknown, account_hint }
+ *   session_lost(env)           optional: a job found it signed out
  *   plan(job)                   the execute steps, exactly one with commit: true
  *   verify_plan(job)            the steps of a verification, reads only
  *   parse_url(url)              the identity a URL names, or null
@@ -28,10 +30,11 @@
  * what each may return.
  */
 
+import appfolio_vendor from "../adapters/appfolio_vendor/adapter.js";
 import fixture from "../adapters/fixture/adapter.js";
 
-/** What this build ships. The vendor-portal adapter arrives in roadmap phase 9. */
-export const ADAPTERS = [fixture];
+/** What this build ships: the vendor portal (phase 9), and the stand-in that proves the runtime. */
+export const ADAPTERS = [appfolio_vendor, fixture];
 
 export function create_registry(adapters = ADAPTERS) {
   const by_id = new Map(adapters.map((adapter) => [adapter.id, adapter]));

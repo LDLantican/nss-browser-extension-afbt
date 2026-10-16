@@ -12,7 +12,7 @@
  *   fetch(url, init)   with a timeout, no cookies, no cache
  *   now(), sleep(ms), uuid()
  *   extension_url(p)   a page packaged in the extension
- *   tabs               open / navigate / exists / close / reveal / close_strays
+ *   tabs               open / navigate / exists / url / close / reveal / close_strays
  *   page.send(...)     one command to an adapter's page script
  *
  * ## The "ASH" tab group
@@ -156,6 +156,9 @@ export function create_chrome_env() {
       },
 
       exists: (tab_id) => chrome.tabs.get(tab_id).then(() => true, () => false),
+
+      /** The address a tab shows now — where a sign-in redirect shows first. */
+      url: (tab_id) => chrome.tabs.get(tab_id).then((tab) => tab.pendingUrl || tab.url || null, () => null),
 
       async close(tab_id) {
         await forget_tab(tab_id);

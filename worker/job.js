@@ -53,6 +53,7 @@ import {
   NetworkError,
   NotSignedIn,
   PERMANENT,
+  SESSION_EXPIRED,
   TabGone,
   TRANSIENT,
   UNKNOWN_OUTCOME,
@@ -61,6 +62,16 @@ import {
 
 export const JOB_KEY = "ash_worker_job";
 export const REHEARSED_KEY = "ash_worker_rehearsed";
+
+/**
+ * Troubleshooting only (the rollout ladder's live kill runs, roadmap phase 9):
+ * how many presses to follow by stopping dead, as a killed service worker
+ * would — the record left at `acting`, nothing reported. The next tick finds
+ * it and reports an unknown outcome, and a verification has to recover the
+ * truth from the live page. Set from Settings → Troubleshooting; absent means
+ * never, which is how it ships.
+ */
+export const STOP_AFTER_PRESS_KEY = "ash_worker_stop_after_press";
 
 /** How many rehearsals to remember, so the map cannot grow without end. */
 const REHEARSED_KEEP = 500;
@@ -278,6 +289,8 @@ async function commit_step(rt, job, ctx, step) {
 
   const out = (job.connection?.auto_submit === true ? await step.act(ctx) : await step.await_person(ctx)) || {};
 
+  if (await stop_after_press(rt)) return OUTCOMES.PAUSED;
+
   if (out.data) Object.assign(job.data, out.data);
 
   job.commit_phase = "acted";
@@ -299,6 +312,18 @@ async function failed(rt, job, error, step_name) {
       : give_back(rt, job, error.message);
 
   if (error instanceof AdapterError) {
+    /* Signed out of the platform: the adapter's cached "live" is wrong now,
+       and the next heartbeat should not repeat it. */
+    if (error.error_class === SESSION_EXPIRED) {
+      const adapter = rt.registry.get(job.connection?.adapter);
+
+      try {
+        await adapter?.session_lost?.(rt.env);
+      } catch {
+        /* Best effort: the server marks the session expired either way. */
+      }
+    }
+
     /* A worker may only say "definitely absent" from a verification. */
     const error_class = error.error_class === VERIFIED_ABSENT && job.mode !== "verify" ? PERMANENT : error.error_class;
 
@@ -404,6 +429,18 @@ async function rehearse(rt, job, step_name) {
   return give_back(rt, job, `Rehearsed up to "${step_name}"; the connection is in dry run, so nothing was submitted.`);
 }
 
+/** Spend one armed "stop after the press", if there is one. */
+async function stop_after_press(rt) {
+  const left = Number(await rt.env.local.get(STOP_AFTER_PRESS_KEY)) || 0;
+
+  if (left <= 0) return false;
+
+  if (left === 1) await rt.env.local.remove(STOP_AFTER_PRESS_KEY);
+  else await rt.env.local.set(STOP_AFTER_PRESS_KEY, left - 1);
+
+  return true;
+}
+
 /** Close the job's tab and remove its record. */
 async function forget(rt, job) {
   if (job.tab_id !== null && job.tab_id !== undefined) await rt.env.tabs.close(job.tab_id).catch(() => null);
@@ -470,6 +507,27 @@ function context(rt, job) {
       await save(rt, job);
 
       return tab_id;
+    },
+
+    /** The address the job's tab shows now, or null — a redirect to a sign-in page shows here first. */
+    async tab_url() {
+      return job.tab_id === null ? null : rt.env.tabs.url(job.tab_id);
+    },
+
+    /**
+     * One photograph of the note this job posts, from the web app, as
+     * `{ name, mime_type, b64 }` for the page script to stage. Only the
+     * holder of a post_photos claim is given the bytes.
+     */
+    async photo(file_id) {
+      /* Unreachable is a NetworkError, which pauses the job as any other call does. */
+      const answer = await rt.client.photo(job.delivery_id, job.claim_token, file_id);
+
+      /* A refusal is one 404 whatever the cause — a lease that ran out mid-way
+         is the likely one — so it is retried, never a person's problem at once. */
+      if (!answer.ok) throw new AdapterError(TRANSIENT, `The web app would not hand over photograph ${file_id} (${answer.status}).`);
+
+      return { name: answer.name, mime_type: answer.mime_type, b64: answer.b64 };
     },
 
     /** Ask the adapter's page script something. Throws TabGone without a tab. */

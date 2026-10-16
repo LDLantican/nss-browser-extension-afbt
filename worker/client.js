@@ -66,6 +66,15 @@ export function check_base(url) {
   };
 }
 
+/** Bytes as base64, a slice at a time so a large photograph never overflows the call stack. */
+export function to_base64(bytes) {
+  let binary = "";
+
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+
+  return btoa(binary);
+}
+
 export function create_client(env) {
   async function base() {
     const { base: checked, error } = check_base(await env.base_url());
@@ -113,6 +122,42 @@ export function create_client(env) {
     const status = Number(response.status) || 0;
 
     return { ok: status >= 200 && status < 300, status, body: parsed ?? {} };
+  }
+
+  /**
+   * One GET for bytes — a photograph a held post_photos delivery names. The
+   * claim token rides in a header because a GET has no body. Resolves
+   * `{ ok, status, name, mime_type, b64 }`; base64 because the bytes go on to
+   * the page script in a message, which carries only what JSON can.
+   */
+  async function get_bytes(path, bearer, claim_token) {
+    const url = `${await base()}${path}`;
+    let response;
+
+    try {
+      response = await env.fetch(url, {
+        method: "GET",
+        headers: {
+          Accept: "*/*",
+          Authorization: `Bearer ${bearer}`,
+          "X-Extension-Version": env.version,
+          "X-Claim-Token": claim_token,
+        },
+      });
+    } catch (error) {
+      throw new NetworkError(error?.message || "Could not reach the web app.");
+    }
+
+    const status = Number(response.status) || 0;
+
+    if (status < 200 || status >= 300) return { ok: false, status };
+
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const type = String(response.headers?.get?.("content-type") || "").split(";")[0].trim();
+    const disposition = String(response.headers?.get?.("content-disposition") || "");
+    const name = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition)?.[1] || "";
+
+    return { ok: true, status, name: decodeURIComponent(name), mime_type: type || "application/octet-stream", b64: to_base64(bytes) };
   }
 
   /** The stored identity, if it belongs to the address configured now. */
@@ -230,6 +275,16 @@ export function create_client(env) {
     complete: (id, report) => call(delivery(id, "complete"), report),
     fail: (id, report) => call(delivery(id, "fail"), report),
     release: (id, claim_token) => call(delivery(id, "release"), { claim_token }),
+
+    /** A photograph for the note a held post_photos delivery posts (phase 9). */
+    async photo(id, claim_token, file_id) {
+      const path = delivery(id, `photos/${encodeURIComponent(file_id)}`);
+      let answer = await get_bytes(path, await access_token(), claim_token);
+
+      if (answer.status === 401) answer = await get_bytes(path, await access_token({ force: true }), claim_token);
+
+      return answer;
+    },
 
     /* The AppFolio import (phase 8): not deliveries, but the same credentials. */
     import_records: (connection, records) => call("/api/worker/imports", { connection, records }),

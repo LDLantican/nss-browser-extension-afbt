@@ -216,6 +216,7 @@ worker/         the 3.0 delivery worker (the new queue, /api/worker/*)
   chrome_env.js   every effect the runtime has, over chrome.*
   index.js        the alarm, the messages, the wiring
 adapters/       one folder per platform-and-role pair
+  appfolio_vendor/  AppFolio's vendor portal (3.2): accept, notes, invoice, Work Done
   fixture/        a stand-in vendor portal packaged in the extension, for tests
 content/        the page scripts
   appfolio_scrape.js       shared reader, loaded first in both AppFolio entries
@@ -277,10 +278,25 @@ until 3.0.)
 
 **Adapters.** A platform's page knowledge lives in `adapters/<id>/` — a
 manifest, a versioned selector file, the steps, and the page script — and the web
-app can switch a version off without touching the others. 3.0 ships one, the
-`fixture` adapter, which bills a pretend portal packaged in the extension and is
-only offered work by a connection someone made for it on purpose. The
-vendor-portal adapter is roadmap phase 9.
+app can switch a version off without touching the others. 3.2 ships two:
+- **`appfolio_vendor`** bills AppFolio's vendor portal. It accepts the work order,
+  posts the photographs as notes of up to ten, submits the invoice and presses Work
+  Done. Each is pressed once, and is looked for before it is pressed.
+  - Its page script is a content script on `vendor.appfolio.com`, beside legacy's.
+  - Its hooks were read off the live portal.
+  - Its contract is in the web app's `docs/browser-extension.md`, "The appfolio_vendor
+    adapter".
+- **`fixture`** bills a pretend portal packaged in the extension. It is only offered
+  work by a connection someone made for it on purpose.
+
+**Is this browser signed in to the vendor portal?** Any vendor page you open says
+so. When that is more than four minutes old, and only while "Process ASH jobs" is
+on, a background tab in the ASH group opens the portal to look, then closes.
+
+**Settings → Troubleshooting** checks the page you have open against both the
+legacy hooks and the adapter's. It can also arm **"Stop after the next press"**, which
+stops this browser dead straight after its next press, as if Chrome had ended it.
+That is how the live kill runs are done. It ships unarmed.
 
 **Tests.** `node tests/run.mjs` (Node is only the place they run — there is no
 package.json) or `tests/index.html` opened inside the extension, which also runs
@@ -288,9 +304,10 @@ the fixture page's DOM and Chrome's real tabs. The kill loop kills the worker
 after every single storage write, request and page command of a job, and after
 random pairs of them, then lets the alarm finish: no run may submit twice. The
 web app's `tests/integration/extension_test.php` runs the same loop against the
-real worker API.
+real worker API, and `vendor_extension_test.php` runs `tests/e2e_vendor.mjs`: whole
+vendor chains, with real photographs, killed around every press.
 
-**The web app's `DELIVERY_EXTENSION_VERSION` must say `3.1.0`** once this
+**The web app's `DELIVERY_EXTENSION_VERSION` must say `3.2.0`** once this
 version is loaded, or both queues and the import answer 426 — the legacy drain included.
 
 ## The tabs it opens

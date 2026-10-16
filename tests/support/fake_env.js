@@ -26,8 +26,13 @@
  */
 
 import { empty_site } from "../../adapters/fixture/site/ledger.js";
+import { empty_portal } from "../../adapters/appfolio_vendor/site/portal.js";
 import { fake_page_command } from "./fake_page.js";
+import { fake_vendor_command, vendor_landing, VENDOR_ORIGIN } from "./fake_vendor.js";
 import { TabGone } from "../../worker/errors.js";
+
+/** A freshly loaded page: every form empty. */
+const blank_tab = (url) => ({ url, form: [], staged: [], attached: 0, note: "" });
 
 const clone = (value) => (value === undefined || value === null ? null : structuredClone(value));
 
@@ -43,6 +48,7 @@ export function create_world({ base = "https://ash.example.test", version = "tes
     next_tab: 1,
     clock: { ms: Date.UTC(2026, 9, 15, 12, 0, 0) },
     site: empty_site(),
+    vendor: empty_portal(),
     lives: 0,
 
     close_browser() {
@@ -112,6 +118,16 @@ export function create_life(world, { kill_after = null } = {}) {
       const path = new URL(url).pathname;
       const answer = world.server.handle(init.method, path, init.headers || {}, init.body || "");
 
+      /* A photograph comes back as bytes, with the headers a file response has. */
+      if (answer.bytes) {
+        const headers = new Map([
+          ["content-type", answer.mime_type],
+          ["content-disposition", `inline; filename="${answer.name}"`],
+        ]);
+
+        return { status: answer.status, headers: { get: (name) => headers.get(name.toLowerCase()) ?? null }, arrayBuffer: async () => answer.bytes.buffer };
+      }
+
       return { status: answer.status, text: async () => JSON.stringify(answer.body) };
     }),
 
@@ -126,18 +142,19 @@ export function create_life(world, { kill_after = null } = {}) {
       open: op("tabs.open", async (url) => {
         const id = world.next_tab++;
 
-        world.tabs.set(id, { url, form: [] });
+        world.tabs.set(id, blank_tab(vendor_landing(world.vendor, url)));
 
         return id;
       }),
       navigate: op("tabs.navigate", async (id, url) => {
         if (!world.tabs.has(id)) return false;
 
-        world.tabs.set(id, { url, form: [] });
+        world.tabs.set(id, blank_tab(vendor_landing(world.vendor, url)));
 
         return true;
       }),
       exists: op("tabs.exists", async (id) => world.tabs.has(id)),
+      url: op("tabs.url", async (id) => world.tabs.get(id)?.url ?? null),
       close: op("tabs.close", async (id) => {
         world.tabs.delete(id);
       }),
@@ -152,6 +169,8 @@ export function create_life(world, { kill_after = null } = {}) {
         const tab = world.tabs.get(tab_id);
 
         if (!tab) throw new TabGone();
+
+        if (!tab.url.startsWith("chrome-extension:")) return fake_vendor_command(world.vendor, tab, command, args);
 
         return fake_page_command(world.site, tab, command, args);
       }),

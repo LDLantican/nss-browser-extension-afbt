@@ -53,9 +53,15 @@ export function create_runtime(env, registry, options = {}) {
     return (await env.local.get(PROCESSING_KEY)) !== false;
   }
 
-  /** Each adapter's view of its connections' sessions in this browser. */
+  /**
+   * Each adapter's view of its connections' sessions in this browser. The
+   * adapter is told whether this browser is processing and what the web app
+   * last said about the connection, so one that has to open a tab to find out
+   * (appfolio_vendor) does so only when the answer could make a difference.
+   */
   async function sessions(connections) {
     const reports = [];
+    const on = await processing();
 
     for (const connection of connections) {
       const adapter = registry.get(connection.adapter);
@@ -64,7 +70,7 @@ export function create_runtime(env, registry, options = {}) {
       let seen = null;
 
       try {
-        seen = await adapter.session(env, connection);
+        seen = await adapter.session(env, connection, { processing: on });
       } catch {
         seen = null;
       }
@@ -107,7 +113,7 @@ export function create_runtime(env, registry, options = {}) {
 
     await env.local.set(
       CONNECTIONS_KEY,
-      (answer.body?.connections || []).map(({ slug, adapter }) => ({ slug, adapter })),
+      (answer.body?.connections || []).map(({ slug, adapter, enabled, reason }) => ({ slug, adapter, enabled, reason: reason ?? null })),
     );
 
     if (fresh.length > 0) answer = await send(answer.body.connections);

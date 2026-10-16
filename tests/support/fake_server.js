@@ -13,8 +13,15 @@
 
 const FLAGS = {
   accept: { idempotent: true, verifiable: true, negative_verify_trusted: true },
+  post_photos: { idempotent: false, verifiable: true, negative_verify_trusted: true },
   submit_invoice: { idempotent: false, verifiable: true, negative_verify_trusted: false },
+  mark_work_done: { idempotent: true, verifiable: true, negative_verify_trusted: true },
 };
+
+/** A photograph's bytes, made up from its id, so a test can see which one went where. */
+export function photo_bytes(file_id) {
+  return new Uint8Array([0xff, 0xd8, 0xff, Number(file_id) % 256, 0xff, 0xd9]);
+}
 
 export function create_fake_server(world, { version = "test", lease_s = 120, user = {} } = {}) {
   const person = { id: 1, name: "Test Worker", email: "worker@example.test", password: "secret", can_deliver: true, ...user };
@@ -72,7 +79,7 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
     now: () => world.clock.ms,
 
     /** A waiting delivery, as Approve would queue it. */
-    enqueue({ operation = "submit_invoice", public_id = "WO-000001", payload = null, expected_total_cents = null, depends_on = null } = {}) {
+    enqueue({ operation = "submit_invoice", public_id = "WO-000001", payload = null, expected_total_cents = null, depends_on = null, part = 1, link = null } = {}) {
       const delivery = {
         id: server.next_delivery++,
         entity: { type: "work_order", id: server.next_delivery, public_id, version: 1 },
@@ -89,6 +96,8 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
         snapshot: null,
         expected_total_cents,
         depends_on,
+        part,
+        link,
         history: [],
       };
 
@@ -115,11 +124,13 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
     },
 
     handle(method, path, headers, text) {
-      const body = text ? JSON.parse(text) : {};
+      const body = text && method !== "GET" ? JSON.parse(text) : {};
 
       server.requests.push({ method, path, body });
 
       const answer = route(path, headers, body);
+
+      if (answer[1]?.bytes) return { status: answer[0], ...answer[1] };
 
       return { status: answer[0], body: answer[1] ?? {} };
     },
@@ -274,7 +285,7 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
           claim_token,
           mode: verify ? "verify" : "execute",
           operation: d.operation,
-          part: 1,
+          part: d.part,
           attempt: d.attempt_count,
           max_attempts: d.max_attempts,
           flags: FLAGS[d.operation] || {},
@@ -283,7 +294,7 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
             id: c.id, slug: c.slug, platform: c.platform, role: c.role, adapter: c.adapter, scope: c.scope,
             dry_run: c.dry_run, auto_submit: c.auto_submit, on_over_limit: c.on_over_limit,
           },
-          link: { id: d.id, namespace: "", external_id: null, number: d.entity.public_id, url: null, status: "pending" },
+          link: d.link || { id: d.id, namespace: "", external_id: null, number: d.entity.public_id, url: null, status: "pending" },
           payload: verify ? d.snapshot : d.payload,
           payload_hash: `hash-${d.id}`,
           expected_total_cents: d.expected_total_cents,
@@ -443,6 +454,26 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
 
     if (path === "/api/worker/imports" || path === "/api/worker/imports/lookup")
       return gated() || (person.can_create === false ? [403, { error: "No." }] : imports(path, body));
+
+    /* A held note's photograph (phase 9): bytes, to the holder only. */
+    const photo = /^\/api\/worker\/deliveries\/(\d+)\/photos\/(\d+)$/.exec(path);
+
+    if (photo) {
+      const refused = gated();
+
+      if (refused) return refused;
+
+      const d = server.delivery(Number(photo[1]));
+      const file_id = Number(photo[2]);
+      const named = (d?.snapshot?.photos || []).some((p) => p.id === file_id);
+
+      if (!held(worker, d, headers["X-Claim-Token"]) || d.lease_ms < server.now() || d.operation !== "post_photos" || !named)
+        return [404, { error: "No such file." }];
+
+      server.photos_served = (server.photos_served || 0) + 1;
+
+      return [200, { bytes: photo_bytes(file_id), mime_type: "image/jpeg", name: `photo-${file_id}.jpg` }];
+    }
 
     const match = /^\/api\/worker\/deliveries\/(\d+)\/(\w+)$/.exec(path);
 

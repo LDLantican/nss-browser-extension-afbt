@@ -4,6 +4,8 @@
  * be killed after any operation (tests/support/fake_env.js).
  */
 
+import appfolio_vendor from "../../adapters/appfolio_vendor/adapter.js";
+import { dispatch } from "../../adapters/appfolio_vendor/site/portal.js";
 import fixture from "../../adapters/fixture/adapter.js";
 import { JOB_KEY } from "../../worker/job.js";
 import { OUTBOX_KEY } from "../../worker/outbox.js";
@@ -27,7 +29,72 @@ export const INVOICE_TOTAL = 10497;
 export const TERMINAL = new Set(["succeeded", "needs_manual", "cancelled"]);
 
 export function registry() {
-  return create_registry([fixture]);
+  return create_registry([fixture, appfolio_vendor]);
+}
+
+/** What a test work order's description says (config/work_orders.php, sample_marker). */
+export const MARKER = "This is a test work order approved by Dustin.";
+
+/**
+ * A world with the vendor portal: one dispatched work order on it, a fake web
+ * app whose connection runs the appfolio_vendor adapter, a browser signed in
+ * to both, and one delivery of `operation` waiting for that work order.
+ */
+export async function vendor_world({
+  operation = "submit_invoice",
+  connection = {},
+  order = {},
+  photos = 3,
+  expected_total_cents = INVOICE_TOTAL,
+  link = {},
+  payload = {},
+} = {}) {
+  const world = create_world();
+
+  world.server = create_fake_server(world, { version: world.version });
+  Object.assign(world.server.connection, { slug: "appfolio-vendor-test", name: "AppFolio vendor (test)", adapter: "appfolio_vendor" }, connection);
+
+  const wo = dispatch(world.vendor, {
+    number: "19576-1",
+    status: operation === "accept" ? "Accept/Reject" : "Available",
+    description: MARKER,
+    ...order,
+  });
+
+  const { env } = create_life(world);
+  const signed = await create_runtime(env, registry()).sign_in({
+    email: world.server.person.email,
+    password: world.server.person.password,
+    device_name: "Test",
+  });
+
+  if (!signed.ok) throw new Error(`sign-in failed: ${signed.status}`);
+
+  const job = { public_id: "WO-000001", is_test: true, sample_marker: MARKER };
+  const shots = Array.from({ length: photos }, (_, i) => ({ id: 101 + i, name: `IMG_${i + 1}.jpg`, mime_type: "image/jpeg", byte_size: 6 }));
+  const by_operation = {
+    accept: { work_order: job },
+    post_photos: { work_order: job, note: `Photos 1–${photos} of ${photos}`, part: 1, parts: 1, photos: shots },
+    submit_invoice: { work_order: job, ...INVOICE },
+    mark_work_done: { work_order: job },
+  };
+
+  const delivery = world.server.enqueue({
+    operation,
+    public_id: "WO-000001",
+    payload: { ...by_operation[operation], ...payload },
+    expected_total_cents: operation === "submit_invoice" ? expected_total_cents : null,
+    link: { id: 9, namespace: "", external_id: null, number: wo.number, url: null, status: "pending", ...link },
+  });
+
+  return { world, delivery, order: wo };
+}
+
+/** The bodies the worker reported for a delivery, in order. */
+export function reports(world, delivery, kind = null) {
+  return world.server.requests
+    .filter((r) => r.path === `/api/worker/deliveries/${delivery.id}/${kind || "complete"}` || (!kind && r.path.endsWith(`/${delivery.id}/fail`)))
+    .map((r) => r.body);
 }
 
 /** A world with a fake web app, signed in, and one job of `operation` waiting. */
