@@ -10,8 +10,8 @@
   <body>
     <!--
       The popup answers two questions, for whoever is doing the day's work: is
-      everything all right, and does anything need me? Everything that answers
-      "why did this go wrong" — page checks, run reports, the per-step buttons —
+      this browser working the queue, and does anything need me? Everything
+      that answers "why did this go wrong" — the page check, the stop switch —
       is in Settings > Troubleshooting, where there is room to read it.
     -->
     <header class="bar">
@@ -19,12 +19,10 @@
       <button type="button" class="link" id="open-settings">Settings</button>
     </header>
 
-    <!-- Outside <main>, so a sign-in that lapses while the popup is open can
-         still be explained above the setup panel it falls back to. -->
     <p class="notice notice--warn" id="alert" hidden></p>
 
-    <!-- Shown only when there is nothing configured or nobody signed in. There
-         is no point rendering a queue to somebody who cannot send it. -->
+    <!-- Shown only when there is no address or no worker sign-in. There is no
+         point rendering a worker that cannot call the web app. -->
     <section class="panel" id="setup" hidden>
       <h2>Not connected</h2>
       <p class="field__hint" id="setup-note"></p>
@@ -36,17 +34,6 @@
     <main id="main" hidden>
       <p class="who" id="who"></p>
 
-      <p class="status" id="status"></p>
-
-      <section class="panel" id="attention" hidden>
-        <h2>Needs your attention</h2>
-
-        <ul class="jobs" id="attention-list"></ul>
-
-        <p class="panel__actions" id="attention-actions"></p>
-      </section>
-
-      <!-- The 3.0 delivery worker: the new queue, beside the legacy one. -->
       <section class="panel worker" id="worker" hidden>
         <h2>Delivery worker</h2>
 
@@ -59,30 +46,13 @@
 
         <ul class="worker__connections" id="worker-connections" hidden></ul>
       </section>
-
-      <details class="panel recent" id="recent" hidden>
-        <summary id="recent-summary">Recently sent</summary>
-
-        <ul class="jobs" id="recent-list"></ul>
-
-        <p class="panel__actions">
-          <button type="button" class="link" id="recent-clear">Clear this list</button>
-        </p>
-      </details>
     </main>
 
     <footer class="foot" id="foot" hidden>
       <p>
-        <span id="auto-note">Approved work is sent to AppFolio automatically every minute.</span>
-        <button type="button" class="link" id="send-now">Send now</button>
-      </p>
-
-      <!-- Only when a tab this extension opened was closed on an error that
-           nobody has looked at yet. The reports carry screenshots, so they are
-           read in Settings. -->
-      <p class="foot__problem" id="tab-errors" hidden>
-        A background task ran into a problem.
-        <button type="button" class="link" id="tab-errors-view">See details</button>
+        While Process ASH jobs is on, this browser checks for approved work every
+        minute and bills it in AppFolio by itself. Import work orders from
+        AppFolio's own work-order list.
       </p>
     </footer>
 

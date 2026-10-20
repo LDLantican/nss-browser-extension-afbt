@@ -22,7 +22,7 @@
  * Amounts and Total are compared with `expected_total_cents` and each item's
  * figure. Nothing is computed here.
  *
- * The rules that refuse are legacy's, kept (docs/browser-extension.md,
+ * The rules that refuse are legacy's, kept (docs/vendor-adapter.md,
  * Delivery): a settled or Estimates work order is not billed; a test-scope
  * connection bills only a work order whose description *on the live page*
  * carries the marker, a live one only one that does not; an invoice over the
@@ -127,7 +127,7 @@ async function page_state(ctx) {
 
 /**
  * The live description against the connection's scope (legacy's last check
- * before typing, docs/browser-extension.md, Scope). Unreadable is a refusal
+ * before typing, docs/vendor-adapter.md, Scope). Unreadable is a refusal
  * on a test connection and allowed on a live one, as legacy had it: a test
  * connection must *see* the marker, a live one must not.
  */

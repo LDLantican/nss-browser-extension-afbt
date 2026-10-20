@@ -1,11 +1,9 @@
 /**
- * The 3.0 delivery worker, wired into Chrome.
- *
- * Imported by background/service_worker.js beside the legacy runtime, which
- * keeps draining legacy jobs (`/api/deliveries`) until legacy is retired
- * (roadmap phase 13). The two share nothing but the web app's address and the
- * notification helper: this one has its own credentials (a worker device
- * token, not the legacy session token), its own alarm and its own tabs.
+ * The delivery worker, wired into Chrome — the extension's only runtime since
+ * 4.0.0, when the legacy drain and its `/api/session` sign-in were removed
+ * (roadmap phase 11). Imported by background/service_worker.js. It has its own
+ * credentials (a worker device token, exchanged hourly for an access token),
+ * its own alarm and its own tabs.
  *
  * The timer is `chrome.alarms`, every minute — the shortest period Chrome
  * honours, and the only timer that survives the service worker being ended.
@@ -43,9 +41,8 @@ export function start_worker_schedule() {
 }
 
 /**
- * Register this browser as a worker with the same email and password the
- * person just signed in with. Called by the legacy SIGN_IN handler, so one
- * press of Sign in sets up both runtimes.
+ * Register this browser as a worker with the person's email and password —
+ * the extension's only sign-in, called by the SIGN_IN handler.
  */
 export async function worker_sign_in({ email, password, device_name }) {
   try {
@@ -55,7 +52,7 @@ export async function worker_sign_in({ email, password, device_name }) {
       return {
         ok: false,
         error: answer.status === 404
-          ? "The web app's worker API is switched off, so this browser will not work the new delivery queue."
+          ? "The web app's worker API is switched off, so this browser can neither import nor deliver."
           : answer.body?.error || `The web app refused the worker sign-in (${answer.status}).`,
       };
 

@@ -12,8 +12,8 @@
       <header class="page__head">
         <h1>Appfolio Helper settings</h1>
         <p class="field__hint">
-          Sends Appfolio work orders to the Alabama Signature Homes web app, and
-          optionally enters them into Buildertrend.
+          Imports AppFolio work orders into the Alabama Signature Homes web app,
+          and bills approved work back in AppFolio's vendor portal.
         </p>
       </header>
 
@@ -32,12 +32,8 @@
           <span class="tab__label">Sign in</span>
           <span class="tab__dot" id="tab-sign-in-dot" title="Not signed in" hidden></span>
         </button>
-        <button class="tab" type="button" role="tab" id="tab-buildertrend" data-tab="buildertrend" aria-controls="panel-buildertrend" aria-selected="false" tabindex="-1">
-          <span class="tab__label">Buildertrend</span>
-        </button>
         <button class="tab" type="button" role="tab" id="tab-troubleshooting" data-tab="troubleshooting" aria-controls="panel-troubleshooting" aria-selected="false" tabindex="-1">
           <span class="tab__label">Troubleshooting</span>
-          <span class="tab__count" id="tab-errors-count" title="Tab errors recorded" hidden></span>
         </button>
       </nav>
 
@@ -85,21 +81,21 @@
             <dt>This device</dt>
             <dd id="device"></dd>
 
-            <dt>Access expires</dt>
-            <dd id="expires"></dd>
+            <dt>Worker</dt>
+            <dd id="worker-id"></dd>
           </dl>
 
           <p class="field__hint">
-            You can also end this device's access from
-            <span id="account-link-holder"></span> on the web app, which is
-            where to look if a device you do not recognise is listed.
+            Signing out forgets this browser's sign-in here only. To end it on
+            the web app as well, retire the device from
+            <span id="account-link-holder"></span>, which is also where to look
+            if a device you do not recognise is listed.
           </p>
 
           <p class="card__actions">
             <button class="btn btn--quiet" type="button" id="sign-out">
               Sign out this device
             </button>
-            <button class="link" type="button" id="recheck">Check now</button>
           </p>
         </div>
 
@@ -126,8 +122,9 @@
               required
             />
             <span class="field__hint">
-              Your password is sent once, to exchange it for a token this browser
-              stores. It is never saved here.
+              Your password is sent once, to register this browser as a worker
+              and exchange it for a token this browser stores. It is never saved
+              here.
             </span>
           </label>
 
@@ -146,124 +143,27 @@
         </form>
       </section>
 
-      <section class="card" role="tabpanel" id="panel-buildertrend" aria-labelledby="tab-buildertrend" hidden>
-        <h2>Buildertrend</h2>
-
-        <label class="check">
-          <input type="checkbox" id="bt-enabled" />
-          <span>
-            <strong>Enter jobs into Buildertrend as well</strong>
-            <span class="field__hint">
-              Turn this off when ASH stops using Buildertrend. The controls
-              disappear from Appfolio and the popup; syncing to the web app is
-              unaffected either way.
-            </span>
-          </span>
-        </label>
-
-        <div id="bt-fields">
-          <p class="field__hint field__hint--lead">
-            These are the values this office fills into every Buildertrend job.
-            They used to be fixed in the extension's code — the client row id was
-            inside a stylesheet selector — so changing which company ASH bills
-            meant a new version.
-          </p>
-
-          <label class="check">
-            <input type="checkbox" id="bt-auto-estimates" />
-            <span>
-              <strong>Write approved estimates automatically</strong>
-              <span class="field__hint">
-                Checks every minute, in a background tab that never takes focus,
-                and writes the estimate for anything approved since. Leave it on
-                for the computer that stays open and signed in to Buildertrend;
-                turn it off on one that should only write estimates when you
-                press the button in the popup.
-              </span>
-            </span>
-          </label>
-
-          <label class="field">
-            <span class="field__label">Job type</span>
-            <input class="field__input" type="text" id="job-type" />
-          </label>
-
-          <label class="field">
-            <span class="field__label">Job group</span>
-            <input class="field__input" type="text" id="job-group" />
-            <span class="field__hint">
-              Buildertrend's filing label. The web app records the same idea as
-              the work order's source.
-            </span>
-          </label>
-
-          <label class="field">
-            <span class="field__label">Client name</span>
-            <input class="field__input" type="text" id="bt-client-name" />
-          </label>
-
-          <label class="field">
-            <span class="field__label">Client row id in Buildertrend</span>
-            <input class="field__input" type="text" id="bt-client-row-id" />
-            <span class="field__hint">
-              Buildertrend's own id for that contact. Required because picking
-              whichever search result comes back first would be a guess, and a
-              guess about who is billed is the wrong kind of guess.
-            </span>
-          </label>
-
-          <label class="field">
-            <span class="field__label">Cost code for estimate lines</span>
-            <input class="field__input" type="text" id="bt-cost-code" />
-            <span class="field__hint">
-              Buildertrend requires one on every estimate line, and it feeds job
-              costing. Type it exactly as it appears in that dropdown, including
-              the number &mdash; for example <code>8000 - General Handyman</code>.
-            </span>
-          </label>
-
-       </div>
-
-        <p class="card__actions">
-          <button class="btn" type="button" id="bt-save">Save Buildertrend settings</button>
-        </p>
-      </section>
-
       <!--
         Everything the popup deliberately does not show. The popup is for the
         day's work; this is for working out why something went wrong, and for
-        whoever is asked to. Run now sits first because it is the one thing here
-        a manager may be sent to press.
+        whoever is asked to.
       -->
       <section class="card" role="tabpanel" id="panel-troubleshooting" aria-labelledby="tab-troubleshooting" hidden>
         <h2>Troubleshooting</h2>
 
         <p class="field__hint field__hint--lead">
-          Nothing here is needed day to day. Approved work is sent by itself
-          every minute, and the popup lists anything that needs a person. These
-          are for finding out why something did not go through.
+          Nothing here is needed day to day. Approved work is billed by itself
+          every minute, and the web app's delivery queue lists anything that
+          needs a person. These are for finding out why something did not go
+          through.
         </p>
-
-        <h3>Run now</h3>
-
-        <p class="field__hint">
-          The same two runs that happen every minute, one at a time, with
-          everything each run counted.
-        </p>
-
-        <p class="card__actions">
-          <button class="btn btn--quiet" type="button" id="deliver-now">Deliver invoices to AppFolio now</button>
-          <button class="btn btn--quiet" type="button" id="estimates-now">Write Buildertrend estimates now</button>
-        </p>
-
-        <pre class="probe" id="run-output" hidden></pre>
 
         <h3>Check an AppFolio vendor page</h3>
 
         <p class="field__hint">
-          Reads the vendor-portal tab you used most recently and lists what the
-          extension looks for on it. It clicks and types nothing, so it is safe
-          on a real client's work order.
+          Reads the vendor-portal tab you used most recently and lists which of
+          the appfolio_vendor adapter's hooks it finds there. It clicks and types
+          nothing, so it is safe on a real client's work order.
         </p>
 
         <p class="card__actions">
@@ -272,6 +172,8 @@
         </p>
 
         <pre class="probe" id="probe-output" hidden></pre>
+
+        <h3>Stop after the next press</h3>
 
         <p class="field__hint">
           For the rollout ladder only: the next time this browser presses Submit,
@@ -283,48 +185,6 @@
         <p class="card__actions">
           <button class="btn btn--quiet" type="button" id="stop-after-press">Stop after the next press</button>
         </p>
-
-        <div id="bt-troubleshooting">
-          <h3>Last Buildertrend runs</h3>
-
-          <p class="field__hint" id="bt-runs-empty">Nothing to report from the last runs.</p>
-
-          <pre class="probe" id="bt-runs" hidden></pre>
-
-          <p class="card__actions">
-            <button class="link" type="button" id="bt-runs-copy" hidden>Copy</button>
-          </p>
-
-          <h3>Buildertrend queue</h3>
-
-          <p class="field__hint" id="bt-queue-note"></p>
-
-          <p class="card__actions">
-            <button class="link link--danger" type="button" id="bt-queue-clear">Clear the Buildertrend queue</button>
-          </p>
-        </div>
-
-        <h3>Tab errors</h3>
-
-        <p class="field__hint">
-          Every tab this extension opens is closed when something goes wrong in
-          it, so what the tab showed is kept here instead: where it was, what it
-          was doing, the error, a copy of the page, and a screenshot when the
-          tab was on screen at the time. Nothing that signs anybody in is kept
-          &mdash; hidden fields, passwords and tokens are stripped from the
-          copy. Only the last 50 are kept, and only the newest 10 keep their
-          screenshot and page copy.
-        </p>
-
-        <p class="card__actions">
-          <button class="btn btn--quiet" type="button" id="tab-errors-copy">Copy as text</button>
-          <button class="btn btn--quiet" type="button" id="tab-errors-download">Download JSON</button>
-          <button class="link link--danger" type="button" id="tab-errors-clear">Clear</button>
-        </p>
-
-        <p class="field__hint" id="tab-errors-empty" hidden>No tab errors recorded.</p>
-
-        <ol class="reports" id="tab-errors-list"></ol>
       </section>
       </main>
       </div>

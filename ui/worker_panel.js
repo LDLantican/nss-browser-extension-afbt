@@ -1,10 +1,11 @@
 /**
- * The popup's account of the 3.0 delivery worker: the "Process ASH jobs"
- * switch, and for each connection this browser could work, whether it may and
- * if not, what would fix it — the heartbeat's own answer, put into words.
+ * The popup's account of the delivery worker: the "Process ASH jobs" switch,
+ * and for each connection this browser could work, whether it may and if not,
+ * what would fix it — the heartbeat's own answer, put into words.
  *
- * Rendered from WORKER_STATE, which reads storage only; the switch is the one
- * thing here that talks to the web app, through a heartbeat sent at once.
+ * Rendered from WORKER_STATE, which reads storage only and which the popup
+ * asks for once and hands in; the switch is the one thing here that talks to
+ * the web app, through a heartbeat sent at once.
  */
 
 /** The heartbeat's reasons (the web app's docs/worker-api.md), as a person reads them. */
@@ -24,18 +25,16 @@ const REASONS = {
 };
 
 const STATES = {
-  signed_out: "Not signed in. Sign out and back in from Settings to set it up.",
+  signed_out: "Not signed in. Sign in from Settings.",
   retired: "This browser's sign-in was ended on the web app. Sign in again from Settings.",
-  unavailable: "The web app's new delivery queue is not available.",
+  unavailable: "The web app's delivery queue is not available.",
   offline: "Can't reach the web app right now.",
   outdated: "The web app needs a different version of this extension.",
   paused: "Waiting to finish a job; it carries on at the next minute.",
 };
 
-export async function render_worker(ask, els) {
-  const state = await ask("WORKER_STATE");
-
-  if (state.ok === false) {
+export function render_worker(state, els) {
+  if (!state || state.ok === false) {
     els.panel.hidden = true;
 
     return;

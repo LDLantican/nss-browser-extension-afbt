@@ -4,8 +4,8 @@
 
    Two pages, one look. The colours are the web app's, so the extension reads as
    part of the same tool rather than a bolted-on utility: maroon for the primary
-   action, near-black text, and the same six status colours the Appfolio badges
-   use so a state means the same thing wherever it appears.
+   action, near-black text, and the status colours the Appfolio badges use so a
+   state means the same thing wherever it appears.
    ========================================================================== */
 
 * {
@@ -175,18 +175,6 @@ button:disabled {
   color: var(--ink-faint);
 }
 
-.check {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin-bottom: var(--gap);
-}
-
-.check input {
-  margin-top: 2px;
-  accent-color: var(--maroon);
-}
-
 /* ---- notices ------------------------------------------------------------- */
 
 .notice {
@@ -232,55 +220,6 @@ button:disabled {
 
 .notice[hidden] {
   display: none;
-}
-
-/* ---- status pills, matching the Appfolio badges ------------------------- */
-
-.pill {
-  display: inline-block;
-  padding: 1px 7px;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-
-.pill--synced {
-  background: var(--good-soft);
-  border-color: #6ee7b7;
-  color: var(--good);
-}
-
-.pill--queued,
-.pill--sending,
-.pill--retry {
-  background: #f5f5f5;
-  border-color: #d4d4d4;
-  color: var(--ink-soft);
-}
-
-.pill--conflict,
-.pill--blocked {
-  background: var(--warn-soft);
-  border-color: #fcd34d;
-  color: var(--warn);
-}
-
-/* Something that has not happened yet and is not a problem — no BuilderTrend
-   job so far. Quieter than queued, which means work is on its way. */
-.pill--none {
-  background: transparent;
-  border-color: var(--line);
-  color: var(--ink-faint);
-}
-
-.pill--rejected {
-  background: var(--bad-soft);
-  border-color: #fca5a5;
-  color: var(--bad);
 }
 
 .sr-only {

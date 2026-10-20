@@ -1,12 +1,12 @@
 /**
- * Everything the extension remembers, and the only code that writes it.
+ * The extension's settings, and the only code that writes them.
  *
- * There is one reason this is a module rather than a call to
- * chrome.storage.local wherever it is needed. Every writer in the previous
- * version did the same read-modify-write dance — get the map, turn it into a
- * Map, mutate it, put it back — and none of them held a lock. Two of them
- * running at once silently discarded one of the two changes, which is exactly
- * what a batch of twenty rows and a badge refresh landing together looks like.
+ * Since 4.0.0 there is one setting — the web app's address — and everything
+ * else this browser remembers belongs to the delivery worker, which keeps its
+ * own keys through worker/chrome_env.js (`ash_worker_*`). This module is still
+ * where a settings write goes, for the reason it was written: a
+ * read-modify-write with no lock silently discards one of two changes that
+ * land together.
  *
  * So writes go through update(), which serializes them into a single promise
  * chain. A mutator sees the value as it is at the moment it runs, not as it was
@@ -14,45 +14,11 @@
  */
 
 const KEYS = {
-  auth: "auth",
   settings: "settings",
-  sync: "sync_jobs",
-  bt_queue: "bt_queue",
-  bt_pending_links: "bt_pending_links",
-  bt_last_run: "bt_last_run",
-  bt_last_estimate_run: "bt_last_estimate_run",
-  delivery_status: "delivery_status",
-  tab_errors: "tab_errors",
-  tab_errors_seen_at: "tab_errors_seen_at",
 };
 
 const DEFAULT_SETTINGS = {
   app_url: "",
-  buildertrend_enabled: true,
-
-  // Whether approved estimates are written on the delivery timer, or only
-  // when somebody presses the popup's button. On, because the point is that
-  // Approve is the last thing a manager does; off is for a laptop that should
-  // not be the browser doing the writing. Meaningless while the switch above
-  // is off, which stops both.
-  bt_auto_estimates: true,
-
-  // The tenant facts the old version baked into the source, including a
-  // Buildertrend contact row id that lived inside a CSS selector. None of them
-  // are this extension's business to know; they are just what this office
-  // happens to fill in.
-  client: "Camelot Properties",
-  job_type: "Handyman Services",
-  job_group: "Appfolio",
-  bt_client_name: "Camelot Properties",
-  bt_client_row_id: "39778241",
-
-  // Required on every estimate line, and it feeds ASH's job costing, so it is
-  // a tenant fact rather than something the filler should choose. Here rather
-  // than in the code because the owner has already said somebody will want to
-  // pick it per job one day; this is where that choice will read from.
-  bt_cost_code: "8000 - General Handyman",
-
 };
 
 /** Serializes every write, so no two mutators can lose each other's work. */
@@ -67,6 +33,12 @@ function raw_get(keys) {
 function raw_set(items) {
   return new Promise((resolve) => {
     chrome.storage.local.set(items, () => resolve());
+  });
+}
+
+function raw_remove(keys) {
+  return new Promise((resolve) => {
+    chrome.storage.local.remove(keys, () => resolve());
   });
 }
 
@@ -118,211 +90,73 @@ export function save_settings(patch) {
   return update(KEYS.settings, {}, (current) => ({ ...current, ...patch }));
 }
 
-export function auth() {
-  return read(KEYS.auth, null);
-}
+/**
+ * What the legacy runtime (3.x and earlier) left in `storage.local`.
+ *
+ * Its session token, the sync ledger, the Buildertrend queue, pending links and
+ * run reports, the outgoing queues' status, and the tab-error reports — the
+ * last of which carried screenshots and were the largest thing this extension
+ * ever stored. Plus the two keys the v1 and Buildertrend migrations read, in
+ * case a browser skipped every version that would have moved them.
+ */
+const LEGACY_KEYS = [
+  "auth",
+  "sync_jobs",
+  "bt_queue",
+  "bt_pending_links",
+  "bt_last_run",
+  "bt_last_estimate_run",
+  "delivery_status",
+  "tab_errors",
+  "tab_errors_seen_at",
+  "work_orders",
+  "bt_unrecorded",
+];
 
-export function save_auth(value) {
-  return update(KEYS.auth, null, () => value);
-}
+/** The same runtime's `storage.session` keys, which a mid-session update leaves behind. */
+const LEGACY_SESSION_KEYS = ["nss_awaiting_submit_url", "nss_sign_in_tabs", "nss_owned_tabs", "nss_outdated_notice"];
 
-export function clear_auth() {
-  return update(KEYS.auth, null, () => null);
-}
-
-/** The sync ledger: work-order number => job record. */
-export function sync_jobs() {
-  return read(KEYS.sync, {});
-}
-
-export function update_sync_jobs(mutator) {
-  return update(KEYS.sync, {}, mutator);
-}
-
-/** The Buildertrend queue: work-order number => scraped work order. */
-export function bt_queue() {
-  return read(KEYS.bt_queue, {});
-}
-
-export function update_bt_queue(mutator) {
-  return update(KEYS.bt_queue, {}, mutator);
-}
+/** The settings only the legacy runtime read: Buildertrend's tenant facts and its switches. */
+const LEGACY_SETTINGS = [
+  "buildertrend_enabled",
+  "bt_auto_estimates",
+  "client",
+  "job_type",
+  "job_group",
+  "bt_client_name",
+  "bt_client_row_id",
+  "bt_cost_code",
+];
 
 /**
- * Jobs that exist in Buildertrend but are not linked on the web app yet:
- * work-order number => `{ url, title, reason, at }`.
+ * Forget everything the legacy runtime stored, keeping the web app's address.
  *
- * This is the one state the two-destination rule cannot express, and there are
- * two shapes of it:
+ * Run on every install and update rather than once behind a flag: removing a
+ * key that is not there costs nothing, and a flag is one more key to explain.
+ * The address is kept because it is the one thing a person typed that still
+ * means something — and keeping it is what spares them the setup panel.
  *
- * - **`url` set** — we know where the job is and the server would not take it
- *   (a lapsed token, a 500, no network). Settling it is one POST.
- * - **`url` null** — the job was saved but its id could not be read. Settling
- *   it means searching Buildertrend for `title` first, then posting.
- *
- * Both belong in one place because they are the same fact to whoever is
- * looking: *Buildertrend has this job and the web app does not know where.*
- *
- * A job in either state must **not** stay in `bt_queue`. Leaving it there is
- * how a re-run makes a second real job, and two jobs sharing a title make the
- * id unfindable for both — the picker refuses an ambiguous match, by design.
- * So the queue is emptied on creation and the shortfall is recorded here,
- * retried at the top of every run and on demand from the popup.
+ * The legacy session token is dropped, not revoked: the endpoint that revoked
+ * it no longer exists, so it is ended from the web app's /account page.
  */
-export function bt_pending_links() {
-  return read(KEYS.bt_pending_links, {});
-}
+export async function remove_legacy() {
+  await raw_remove(LEGACY_KEYS);
 
-export function update_bt_pending_links(mutator) {
-  return update(KEYS.bt_pending_links, {}, mutator);
-}
+  try {
+    await chrome.storage.session.remove(LEGACY_SESSION_KEYS);
+  } catch {
+    /* Session storage is per browser session and empty after a restart anyway. */
+  }
 
-/**
- * What the last Buildertrend run did: `{ started_at, finished_at, summary,
- * jobs: [...] }`.
- *
- * One run, not a log. `notify.js` reuses a single notification id, so the only
- * report this leg had was a toast that the next toast overwrote — which is why
- * three separate failures were diagnosed by inference from the server's access
- * log instead of by reading what the extension already knew. This is the
- * durable counterpart, and the popup renders it as plain text so it survives a
- * screenshot or a paste into a chat.
- */
-export function bt_last_run() {
-  return read(KEYS.bt_last_run, null);
-}
+  await update(KEYS.settings, {}, (current) => {
+    if (!LEGACY_SETTINGS.some((key) => key in current)) return undefined;
 
-export function save_bt_last_run(value) {
-  return update(KEYS.bt_last_run, null, () => value);
-}
+    const next = { ...current };
 
-/**
- * What the last estimate run did.
- *
- * Its own record rather than sharing `bt_last_run`, because the two answer
- * different questions — one is "were the jobs created", the other "were they
- * estimated" — and a run of either would otherwise erase the other's account.
- *
- * It exists for the reason the job-creation record does: the only report was a
- * banner in the popup, and the popup's own heartbeat clears that banner the
- * moment it is reopened. So the first estimate rehearsal reported its result to
- * nobody, exactly as six job-creation runs had.
- */
-export function bt_last_estimate_run() {
-  return read(KEYS.bt_last_estimate_run, null);
-}
+    for (const key of LEGACY_SETTINGS) delete next[key];
 
-export function save_bt_last_estimate_run(value) {
-  return update(KEYS.bt_last_estimate_run, null, () => value);
-}
-
-/**
- * Where the outgoing queues stood after their last run: `{ invoices, estimates }`,
- * each `{ at, ok, error, waiting, paused, awaiting_submit, reason }`.
- *
- * Not a run report — those are `bt_last_estimate_run` and the Troubleshooting
- * card. This is what the popup's status line reads, and it exists because the
- * line used to look only at work on its way *in*: a vendor portal that had been
- * signed out all weekend left every approved invoice queued, the run refused
- * before claiming anything (so /deliveries stayed empty too), and the popup said
- * "All caught up". Written after every run, timed or pressed, empty or not,
- * because here "nothing was waiting" is exactly the news.
- */
-export function delivery_status() {
-  return read(KEYS.delivery_status, {});
-}
-
-export function save_delivery_status(kind, value) {
-  return update(KEYS.delivery_status, {}, (current) => ({ ...current, [kind]: value }));
-}
-
-/**
- * What an owned tab looked like when a run gave up on it, newest first.
- *
- * Kept because the tab is closed on every error now, and the page was the only
- * evidence of what went wrong. background/tab_errors.js decides what goes in a
- * report and how many carry a screenshot; this only stores the list.
- */
-export function tab_errors() {
-  return read(KEYS.tab_errors, []);
-}
-
-export function update_tab_errors(mutator) {
-  return update(KEYS.tab_errors, [], mutator);
-}
-
-export function clear_tab_errors() {
-  return update(KEYS.tab_errors, [], () => []);
-}
-
-/** When somebody last looked at the reports, so the popup only mentions new ones. */
-export function tab_errors_seen_at() {
-  return read(KEYS.tab_errors_seen_at, 0);
-}
-
-export function mark_tab_errors_seen() {
-  return update(KEYS.tab_errors_seen_at, 0, () => Date.now());
-}
-
-/**
- * Move a v1 queue into its new home, once.
- *
- * v1 kept the Buildertrend queue under `work_orders`, which is now the name of
- * nothing — the web app's ledger is `sync_jobs` and the Buildertrend queue is
- * `bt_queue`. A manager mid-morning when the extension updates should not lose
- * the rows she had already picked out, so the old key is moved rather than
- * ignored, and removed so this cannot run twice.
- */
-export async function migrate_v1_queue() {
-  const stored = await raw_get(["work_orders", KEYS.bt_queue]);
-  const old = stored.work_orders;
-
-  if (!old || typeof old !== "object") return 0;
-
-  const moved = Object.keys(old).length;
-
-  await update(KEYS.bt_queue, {}, (current) => ({ ...old, ...current }));
-  await new Promise((resolve) => {
-    chrome.storage.local.remove("work_orders", () => resolve());
+    return next;
   });
-
-  return moved;
-}
-
-/**
- * Move `bt_unrecorded` into `bt_pending_links`, once.
- *
- * The old key held `number => url`; the new one holds an object, because a
- * pending link now also covers "the job exists and we do not know its id".
- *
- * That key almost certainly never held anything — the POST it recorded
- * failures from was never once reached — so this is insurance rather than a
- * migration. It is written anyway because the thing it would lose is a link to
- * a real job, which is the failure this whole area exists to prevent, and
- * being sure costs eight lines.
- */
-export async function migrate_bt_unrecorded() {
-  const stored = await raw_get(["bt_unrecorded"]);
-  const old = stored.bt_unrecorded;
-
-  if (!old || typeof old !== "object") return 0;
-
-  const moved = Object.entries(old).map(([number, url]) => [
-    number,
-    { url: typeof url === "string" ? url : null, title: "", reason: "Carried over from an earlier version.", at: Date.now() },
-  ]);
-
-  if (moved.length > 0)
-    await update(KEYS.bt_pending_links, {}, (current) => ({
-      ...Object.fromEntries(moved),
-      ...current,
-    }));
-
-  await new Promise((resolve) => {
-    chrome.storage.local.remove("bt_unrecorded", () => resolve());
-  });
-
-  return moved.length;
 }
 
 export { KEYS, DEFAULT_SETTINGS };

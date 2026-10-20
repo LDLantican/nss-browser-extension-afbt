@@ -1,34 +1,25 @@
 # NSS Appfolio Helper
 
-A Chrome extension for Alabama Signature Homes' office managers. It takes work
-orders out of AppFolio and puts them into two places that do not depend on each
-other:
+A Chrome extension for Alabama Signature Homes' office. It is the browser half
+of the ASH web app, and since 4.0.0 it does exactly two things, both through one
+sign-in:
 
-- **the ASH web app** — where a subcontractor enters what a job cost, a manager
-  marks it up and approves it, and the day's approved work leaves as CSV or
-  JSON. This is the leg that matters, and the reason the extension exists now.
-- **Buildertrend** — the old destination, still working, unchanged, and
-  switchable off in Settings the day ASH stops using it.
+- **Import.** On the property manager's AppFolio work-order pages, the work
+  orders a person ticks are imported into the web app's work-order system.
+- **Deliver.** As a **delivery worker**, it bills approved work back in
+  AppFolio's vendor portal — accepts the work order, posts the photographs,
+  submits the invoice and presses Work Done — through the `appfolio_vendor`
+  adapter. It does this by itself, every minute, while the browser is open.
 
-Turning Buildertrend off in Settings removes its controls and its queue and
-changes nothing about the web app.
+Both go through the web app's worker API (`/api/worker/*`, the web app's
+`docs/worker-api.md`) and nothing else.
 
-**The reverse is no longer true, deliberately.** The Buildertrend leg re-reads
-from the web app, at the moment of filling, which population of work orders this
-installation may touch — so a web app that cannot be reached stops jobs being
-created in Buildertrend even though Buildertrend itself is fine. That is the
-owner's rule applied to the obvious failure: a work order must not end up in one
-system and not the other, and the way to honour that is to refuse rather than to
-guess on a stale answer about whether something is test data.
-
-## Why the web app
-
-Today, billing Camelot for a job means importing the AppFolio work order into
-Buildertrend, building an estimate there, building an invoice there, and pushing
-the result back to AppFolio. Four steps in a tool whose only purpose in the
-chain is to capture ASH's own cost-versus-billed figures, done by hand for a
-hundred-odd work orders a day. The web app replaces that middle, and this
-extension is the first step of it.
+**4.0.0 removed the legacy runtime.** Sync, the legacy delivery drain, the
+Buildertrend leg (jobs and estimates), the tab-error reports and the session
+sign-in at `/api/session` are gone, along with the web app endpoints they
+called. An upgraded browser forgets what that runtime stored the first time
+4.0.0 starts, keeping only the web app's address, and has to be signed in once
+more if it never signed in as a worker.
 
 ## Setting it up
 
@@ -38,14 +29,10 @@ extension is the first step of it.
    contact it** — this is expected, and the extension cannot reach the web app
    without it. A user-typed address cannot be declared in the manifest, so the
    permission is requested at the moment you save.
-4. Sign in with your web app email and password. This exchanges them once for a
-   token stored in this browser; the password is not kept. The device appears on
-   the web app's **Your Account** page, where you can end its access. The same
-   sign-in registers this browser as a **delivery worker** for the new queue
-   (see [The 3.0 delivery worker](#the-30-delivery-worker)), which is listed on
-   that page too.
-5. If ASH still uses Buildertrend, check the values in section 3 — job type, job
-   group, client name, and the client's Buildertrend row id.
+4. Sign in with your web app email and password. This registers this browser as
+   a worker (`/api/worker/register`) and keeps the **device token** it is given;
+   the password is not kept. The device appears on the web app's **Your
+   Account** page, where you can retire it.
 
 ### Local or production
 
@@ -54,216 +41,75 @@ Settings and nothing else, so one install points at one web app at a time:
 `http://localhost/projects/alabamasignaturehomes` under XAMPP,
 `http://localhost:6789` under the dev server, or the real domain.
 
-**Only those.** Since 3.0 the manifest names the addresses it may ever ask for —
+**Only those.** The manifest names the addresses it may ever ask for —
 `https://alabamasignaturehomes.com`, its subdomains, and `localhost` /
-`127.0.0.1` on any port — where it used to accept any address at all. Every
-call carries a credential, so anything that is not this computer must be https.
-A web app moved to another domain needs a manifest change and a new version.
+`127.0.0.1` on any port. Every call carries a credential, so anything that is
+not this computer must be https. A web app moved to another domain needs a
+manifest change and a new version.
 
-**Changing that address signs this device out and clears the sync list**, on
-purpose. The token was issued by the app you are leaving and the new one will
-refuse it; more importantly the sync list stores work-order ids, and the popup
-builds a record link as `<address>/work-orders/<id>` — so a stale id against a
-new address gives a *working* link to a different, real work order. The
-Buildertrend queue is kept, since it has nothing to do with which web app is
-configured.
-
-The comparison is the whole address, not just the host, because under XAMPP every
+**Changing that address signs this device out**, on purpose: the device token
+was issued by the app you are leaving and the new one will refuse it. The
+comparison is the whole address, not just the host, because under XAMPP every
 project shares `http://localhost` and differs only by path. Dropping a trailing
-slash is normalized away and does not count as a change. Saving the Buildertrend
-settings never signs anybody out.
+slash is normalized away and does not count as a change.
 
-## Importing (3.1)
+## Importing
 
-**Since 3.1.0 the AppFolio work-order list imports; it no longer syncs.** The
-button at the bottom of the list, and the one on a single work order's page, is
-**Import**. It sends the ticked work orders to the web app's new work-order
-system, through the delivery-worker sign-in (`worker/imports.js`). Legacy Sync, and the
-Buildertrend job it queued for each row, are no longer started from AppFolio's
-pages. Recording a Buildertrend job is keyed on the web app's legacy tables, and
-the new system has no Buildertrend adapter. The Buildertrend queue, its runner
-and everything in the popup are unchanged.
+The bar at the bottom of AppFolio's work-order list, and the button on a single
+work order's page, is **Import**. It sends the ticked work orders to the web app
+through the worker sign-in (`worker/imports.js`). Anyone whose account may add
+work orders in the web app may import.
 
-- **The page picks the connection (3.3.0).** Every import and badge lookup
-  carries the AppFolio page's host, read off the tab that asked, and the company
-  name the page shows. The web app imports through the connection for that host,
-  and refuses a page signed in to another company. A refused lookup says why on
-  the bar, not only in a badge's tooltip, and the bar counts what an import did
-  apart: *1 imported, 2 already imported*.
-- **The connection decides test or live.** Each property-manager connection in
-  the web app is in `test` or `live` mode. In test mode only Dustin's test work
-  orders are imported; in live mode only real ones. The bar states it, and a
-  row the mode does not take is refused on the page and again by the web app.
-- **Badges show what the new system holds:** `WO-000123 · Assigned · Shauna`,
-  *in legacy* for a number the old system still has open (the import refuses
-  those, so one job is never tracked in both), or *not imported*.
+- **The page picks the connection.** Every import and badge lookup carries the
+  AppFolio page's host, read off the tab that asked, and the company name the
+  page shows. The web app imports through the property-manager connection for
+  that host, and refuses a page signed in to another company. A refused lookup
+  says why on the bar, not only in a badge's tooltip, and the bar counts what an
+  import did apart: *1 imported, 2 already imported*.
+- **The connection decides test or live.** Each property-manager connection is in
+  `test` or `live` mode. In test mode only Dustin's test work orders are imported
+  (their description is `This is a test work order approved by Dustin.`); in live
+  mode only real ones. The bar states the mode permanently, and a row the mode
+  does not take is refused on the page and again by the web app. **With no mode
+  in hand nothing can be imported**: the button says *mode unknown*, and *Retry
+  status* recovers it along with the badges.
+- **Badges show what the web app holds right now:** `WO-000123 · Assigned ·
+  Shauna`, or *not imported*. If the web app cannot be reached or this browser
+  is not signed in, every badge says so (*status unknown*, *sign in for status*)
+  rather than showing a remembered value — a stale badge would cause a wrong
+  decision silently, and an honest one costs a click.
 - **Importing again is safe.** A number the web app already holds is refreshed
   (its description and unit), never doubled. One whose street changed is flagged
   *address differs* and left for a person.
-- **It needs the delivery-worker sign-in.** Signing in from Settings does both.
-  Without it every badge says *sign in for status*. Anyone with permission to add
-  work orders in the web app may import.
 
-The sections below describe Sync and the Buildertrend leg as they worked
-before 3.1. They still describe the popup's Buildertrend queue and the legacy
-delivery drain, which are unchanged.
+Rows are chosen with **AppFolio's own row checkboxes** — the ones that drive
+their header select-all and their "N Selected" counter. The extension adds no
+box of its own; it reads theirs. Shift-click selects a range, which AppFolio
+does not do by itself. Nothing is ever ticked for you: not every AppFolio work
+order is ASH's, and there is no field that says which are. The only two things
+the extension writes to the selection are finishing a shift-range you started
+and clearing rows it has just imported — both by clicking the box, so AppFolio's
+own counter never disagrees with what you see.
 
-## Using it
+A row is read by fetching its own work-order page and parsing it
+(`content/appfolio_scrape.js`), one at a time, so forty rows never become forty
+parallel requests against the portal a person is working in.
 
-**Syncing writes to both places.** Ticked rows go to the web app first — it is
-the system of record, and the fast, reliable half — and then a Buildertrend job
-is created for each, one at a time, in one tab. There is no "also queue for
-Buildertrend" checkbox any more: a job has to exist in both, so making the second
-one optional was the wrong shape, and the checkbox's state lived only in the bar
-and reset on every re-render, so ticking it and then sorting the list silently
-lost it.
+## The delivery worker
 
-A work order the web app already holds a Buildertrend URL for is **skipped**
-rather than created again. That is the only duplicate check available — there is
-no API to ask Buildertrend whether a job exists — and without it a re-run after
-an unconfirmed save makes a second real job.
+**What a person sees.** The popup shows who is signed in and the *Delivery
+worker* panel: a **Process ASH jobs** switch (on by default), and for each
+connection this browser could work, either "ready" or what would make it ready —
+"sign in to it in this browser", "paused on the web app". Those words are the
+web app's own answer to the heartbeat. Jobs run in background tabs gathered into
+one collapsed tab group called **ASH**, on an alarm (`ash-worker-tick`) every
+minute.
 
-If Buildertrend fails, the web app still has the work order and knows it has no
-Buildertrend job. Nothing is silently out of step; finishing the missing half is
-a re-run rather than an investigation.
-
-**A row leaves the queue when its job is created, not when its link is
-recorded.** Waiting for the link reads as the careful choice and is the
-dangerous one: a job whose id could not be read stayed queued, so the next sync
-created a *second* job with the same title — and two jobs sharing a title cannot
-be told apart afterwards, so neither can ever be linked. Creation empties the
-row instead, and anything still unlinked is listed in the popup with a **Link
-now** button. That button searches Buildertrend and records what it finds; it
-never opens the add-job page, so pressing it twice cannot create anything.
-
-A job created but not identified no longer stops the rest of the batch either.
-Stopping is right for a systemic failure — signed out, web app unreachable —
-because the remaining rows would fail the same way. An unreadable id is not
-that: the job is fine, and the link is one click to repair.
-
-**Settings → 4 · Troubleshooting** shows what the last Buildertrend run did, per
-job, as plain text meant to be screenshotted or pasted. It exists because this leg once failed six
-runs in a row while reporting nothing at all.
-
-**On the AppFolio work-order list**, rows are chosen with **AppFolio's own row
-checkboxes** — the ones that drive their header select-all and their "N
-Selected" counter. The extension adds no box of its own; it reads theirs. It
-used to add one, and the result was two checkboxes on every row a thumb's width
-apart, with no way to tell which meant *sync* and which sat beside *Cancel*.
-Shift-click selects a range, which AppFolio does not do by itself. Every row
-also gains a status badge read live from the web app, and the bar at the bottom
-sends what is ticked and optionally queues the same rows for Buildertrend.
-
-Nothing is ever ticked for you: not every AppFolio work order is ASH's, and
-there is no field that says which are, so the choice stays yours. The only two
-things the extension writes to the selection are finishing a shift-range you
-started and clearing rows it has just sent — and it does both by clicking the
-box, so AppFolio's own counter never disagrees with what you see. (Setting
-`checked` and firing a `change` event does not update their counter; only a
-click does. Measured against the live list, not assumed.)
-
-A row is read by fetching its own work-order page and parsing it — confirmed
-working against a live list — rather than by clicking expand and reading the
-fields on the next statement, which is the race that used to leave fields empty.
-
-**A badge says what the web app holds right now** — not imported, synced,
-who it is assigned to, whether it is approved. If the web app cannot be reached
-or this device is signed out, every badge says *status unknown* rather than
-showing a remembered value. That is deliberate: a stale badge would cause a
-wrong decision silently, and an honest one costs a click.
-
-**The popup** is written for whoever is doing the day's work, and answers two
-questions: is everything all right, and does anything need me? It shows one
-status line (*All caught up*, *N things need your attention*, *Sending…*, or
-*Checking for approved work…* when no invoice run has finished in ten minutes),
-then only the rows a person has to act on — each with the reason and one button
-(*Try again*, *Open in web app*, *Link now*, *Add to Buildertrend*, or *Sign in*
-when approved invoices or estimates are held up by a signed-out AppFolio or
-Buildertrend) — and a folded
-*Recently sent* list. Its footer says approved work goes out by itself every
-minute and offers **Send now**, which runs the invoice pass and then the
-estimate pass and reports the result in one sentence.
-
-Everything for working out *why* something went wrong is in **Settings → 4 ·
-Troubleshooting** instead: the invoice and estimate runs as separate buttons
-with every count they keep, the vendor-page check, the last Buildertrend run
-reports, clearing the Buildertrend queue, and the tab-error reports.
-
-**Sending is safe to repeat.** The web app keys work orders on client and
-number, so re-sending one either creates it or refreshes a few fields — it can
-never move a job backwards, unassign anyone, or change the title something was
-billed under. After every batch the extension asks the web app what it actually
-holds and records that, rather than recording what it believes it sent. So an
-interrupted batch costs a retry, not a reconciliation.
-
-## Layout
-
-```
-background/     the service worker: all network, credentials and queues
-  api.js          every request to the web app
-  auth.js         sign-in, sign-out, heartbeat
-  store.js        chrome.storage, with writes serialized
-  sync.js         the durable queue, retries, and the reconcile step
-  delivery.js     draining the delivery queue into the Appfolio vendor portal
-  portals.js      is anybody signed in to the vendor portal / Buildertrend
-  buildertrend.js opening and driving the Buildertrend tab
-  owned_tabs.js   which tabs this extension opened, locking them, closing them
-  tab_errors.js   what a tab showed when a run gave up on it
-  notify.js       notifications and the toolbar badge
-  senders.js      which pages may send the service worker which messages
-worker/         the 3.0 delivery worker (the new queue, /api/worker/*)
-  runtime.js      one tick: outbox, heartbeat, the job in hand, claims
-  job.js          one job as a step machine that survives the worker dying
-  client.js       the worker API, device and access tokens
-  outbox.js       results kept until the web app has them
-  journal.js      the popup's short account of recent jobs
-  registry.js     the adapters this build carries
-  chrome_env.js   every effect the runtime has, over chrome.*
-  index.js        the alarm, the messages, the wiring
-adapters/       one folder per platform-and-role pair
-  appfolio_vendor/  AppFolio's vendor portal (3.2): accept, notes, invoice, Work Done
-  fixture/        a stand-in vendor portal packaged in the extension, for tests
-content/        the page scripts
-  appfolio_scrape.js       shared reader, loaded first in both AppFolio entries
-  appfolio_list.js         badges, the action bar, reading AppFolio's ticks
-  appfolio_work_order.js   the single work-order page
-  buildertrend_add_job.js  v1's form filler, near enough unchanged
-  tab_guard.js             the lock on a tab the extension is working in
-ui/             popup and options
-tests/          node tests/run.mjs, or open tests/index.html inside the extension
-```
-
-Everything that touches the network lives in the service worker, and that is not
-a preference: under Manifest V3 a content script's `fetch` is subject to the
-page's CORS rules, so a call to the web app from a script on appfolio.com would
-be blocked. Routing it through the worker also means the web app needs no CORS
-headers at all.
-
-No build step, no dependencies, no bundler — the browser loads these files as
-they are.
-
-## The 3.0 delivery worker
-
-The web app is moving its work orders to new tables (its
-`docs/architecture/`), and with them to a new delivery queue that this
-extension works through `/api/worker/*` (the web app's `docs/worker-api.md`).
-3.0 adds the runtime for that queue **beside** the one above, which keeps
-draining the legacy queue until legacy is retired. The two share nothing but
-the web app's address: separate credentials, a separate alarm
-(`ash-worker-tick`, every minute), separate tabs.
-
-**What a person sees.** The popup's *Delivery worker* panel: a **Process ASH
-jobs** switch (on by default), and for each connection this browser could work,
-either "ready" or what would make it ready — "sign in to it in this browser",
-"paused on the web app". Those words are the web app's own answer to the
-heartbeat. Jobs run in background tabs gathered into one collapsed tab group
-called **ASH**.
-
-**Signing in.** The Settings sign-in also registers this browser as a worker
-and keeps a **device token** (a year, revocable at *Your Account*) in
-`storage.local`. Each hour the device token is exchanged for an **access token**
-kept only in `storage.session`, so closing the browser throws it away. An
-install upgraded from 2.x is not registered until somebody signs in again.
+**Signing in.** The device token (a year, revocable at *Your Account*) lives in
+`storage.local`. Each hour it is exchanged for an **access token** kept only in
+`storage.session`, so closing the browser throws it away. Signing out forgets
+both in this browser only; retire the device at *Your Account* to end it on the
+server too.
 
 **Crash safety.** A job is a list of short steps saved to `storage.session`
 after each one, so a service worker that dies — Chrome ends them freely —
@@ -278,19 +124,19 @@ and are resent until the web app answers; it treats a resend as the same report.
 **Safe defaults.** A connection's `dry_run` must be explicitly false before
 anything is submitted, and its `auto_submit` explicitly true before this browser
 presses the button; otherwise the job is rehearsed and given back, or the tab is
-brought to a person to press. (The legacy runtime defaulted both the other way
-until 3.0.)
+brought to a person to press.
 
 **Adapters.** A platform's page knowledge lives in `adapters/<id>/` — a
 manifest, a versioned selector file, the steps, and the page script — and the web
-app can switch a version off without touching the others. 3.2 ships two:
+app can switch a version off without touching the others. Two ship:
 - **`appfolio_vendor`** bills AppFolio's vendor portal. It accepts the work order,
   posts the photographs as notes of up to ten, submits the invoice and presses Work
-  Done. Each is pressed once, and is looked for before it is pressed.
-  - Its page script is a content script on `vendor.appfolio.com`, beside legacy's.
-  - Its hooks were read off the live portal.
-  - Its contract is in the web app's `docs/browser-extension.md`, "The appfolio_vendor
-    adapter".
+  Done. Each is pressed once, and is looked for before it is pressed. Its page
+  script is a content script on `vendor.appfolio.com`, its hooks were read off the
+  live portal, and its contract is in the web app's `docs/vendor-adapter.md`,
+  "The appfolio_vendor adapter". Before it types anything it re-reads the work
+  order's description off the vendor page and refuses one that disagrees with the
+  connection's mode.
 - **`fixture`** bills a pretend portal packaged in the extension. It is only offered
   work by a connection someone made for it on purpose.
 
@@ -298,122 +144,70 @@ app can switch a version off without touching the others. 3.2 ships two:
 so. When that is more than four minutes old, and only while "Process ASH jobs" is
 on, a background tab in the ASH group opens the portal to look, then closes.
 
-**Settings → Troubleshooting** checks the page you have open against both the
-legacy hooks and the adapter's. It can also arm **"Stop after the next press"**, which
-stops this browser dead straight after its next press, as if Chrome had ended it.
-That is how the live kill runs are done. It ships unarmed.
+**One browser has to stay open**, signed in to the web app and to AppFolio's
+vendor portal, for work to go out without anybody pressing anything. Any number
+can be — the server hands a job to one worker at a time.
 
-**Tests.** `node tests/run.mjs` (Node is only the place they run — there is no
+**The web app's `DELIVERY_EXTENSION_VERSION` must say `4.0.0`** once this
+version is loaded, or the worker API answers 426.
+
+## Settings
+
+- **Web app** — the address, and whether Chrome has granted permission to call it.
+- **Sign in** — the worker sign-in, and once signed in, who, which device, and
+  the worker's number, with **Sign out this device**.
+- **Troubleshooting** — **Check the page** reads the vendor-portal tab you used
+  most recently and lists which of the `appfolio_vendor` adapter's hooks it found
+  (read-only, safe on a real work order). **Stop after the next press** stops
+  this browser dead straight after its next press, as if Chrome had ended it,
+  which is how the live kill runs are done; it ships unarmed.
+
+## Layout
+
+```
+background/     the service worker: Settings' half of it
+  service_worker.js  the address, sign-in and sign-out, the page check, install cleanup
+  api.js             normalizing the address and the origin pattern to ask for
+  store.js           the settings, with writes serialized; what the legacy runtime left
+  notify.js          notifications
+  senders.js         which pages may send the service worker which messages
+worker/         the delivery worker (/api/worker/*)
+  runtime.js      one tick: outbox, heartbeat, the job in hand, claims
+  job.js          one job as a step machine that survives the worker dying
+  client.js       the worker API, device and access tokens
+  imports.js      the AppFolio import, on the same credentials
+  outbox.js       results kept until the web app has them
+  journal.js      a short account of recent jobs
+  registry.js     the adapters this build carries
+  chrome_env.js   every effect the runtime has, over chrome.*
+  index.js        the alarm, the worker's messages, the wiring
+adapters/       one folder per platform-and-role pair
+  appfolio_vendor/  AppFolio's vendor portal: accept, notes, invoice, Work Done
+  fixture/        a stand-in vendor portal packaged in the extension, for tests
+content/        the property manager's AppFolio pages
+  appfolio_scrape.js       shared reader, loaded first in both entries
+  appfolio_list.js         badges, the Import bar, reading AppFolio's ticks
+  appfolio_work_order.js   the single work-order page
+ui/             popup and options
+tests/          node tests/run.mjs, or open tests/index.html inside the extension
+```
+
+Everything that touches the network lives in the service worker, and that is not
+a preference: under Manifest V3 a content script's `fetch` is subject to the
+page's CORS rules, so a call to the web app from a script on appfolio.com would
+be blocked. Routing it through the worker also means the web app needs no CORS
+headers at all.
+
+No build step, no dependencies, no bundler — the browser loads these files as
+they are.
+
+## Tests
+
+`node tests/run.mjs` (Node is only the place they run — there is no
 package.json) or `tests/index.html` opened inside the extension, which also runs
 the fixture page's DOM and Chrome's real tabs. The kill loop kills the worker
 after every single storage write, request and page command of a job, and after
 random pairs of them, then lets the alarm finish: no run may submit twice. The
-web app's `tests/integration/extension_test.php` runs the same loop against the
-real worker API, and `vendor_extension_test.php` runs `tests/e2e_vendor.mjs`: whole
-vendor chains, with real photographs, killed around every press.
-
-**The web app's `DELIVERY_EXTENSION_VERSION` must say `3.3.0`** once this
-version is loaded, or both queues and the import answer 426 — the legacy drain included.
-
-## The tabs it opens
-
-Three things open a tab and drive it: delivering invoices into the vendor
-portal, creating Buildertrend jobs, and writing Buildertrend estimates. Each tab
-is recorded in `background/owned_tabs.js`, and nothing else is ever treated as
-the extension's — a vendor-portal or Buildertrend tab you opened yourself is
-never adopted, locked or closed.
-
-**While a run is working in one, the tab is locked.** A banner says what it is
-doing, and every real click, tap, scroll and keystroke in the page is swallowed.
-The automation is unaffected, because what it does to the page produces events
-the browser marks as untrusted, and only trusted ones are blocked.
-
-**What a page cannot stop** is the tab being closed, reloaded, or navigated from
-the address bar, Back button or a browser shortcut. Closing is detected: a run
-whose tab you close stops, and says so, rather than opening another behind your
-back. So don't close one mid-run unless you mean to stop it.
-
-**The lock cannot outlive the run.** The page asks every three seconds whether
-it is still locked, and the answer comes only from the running service worker.
-If that worker is gone — crashed, evicted, extension reloaded — the answer is
-"no", the banner lifts, and the next worker closes the tab it left behind.
-
-**A tab is closed when its run finishes, and whenever something goes wrong in
-it**, whether the run was scheduled or started from the popup. Two are handed to
-you instead — unlocked, brought forward, and left alone from then on:
-
-- a **sign-in page**, when AppFolio or Buildertrend has signed you out;
-- a **filled invoice waiting for Submit Invoice**, when automatic submitting is
-  off.
-
-A sign-in page is only brought forward when you pressed a button. Invoices and
-estimates are also delivered **every minute by themselves** — the web app's
-Approve is the last thing a manager has to do — and a timed run that finds you
-signed out leaves its sign-in tab in the background, shows one notification,
-and waits for that tab rather than opening another every minute. Sign in on it
-and the next minute's run carries on.
-
-So **one browser has to stay open, with this extension signed in to the web app
-and to AppFolio's vendor portal and Buildertrend.** Any number can be — two
-browsers never deliver the same job twice — and a laptop that should not write
-estimates by itself can say so in **Settings → 3 · Buildertrend**.
-
-### Tab errors
-
-Closing a tab on an error takes away the page that showed what went wrong, so a
-report is kept first. **Settings → 4 · Troubleshooting** lists them, newest first:
-the time, which leg, the work order, the step, the error, the page address, a
-copy of the page, and a screenshot when the tab happened to be on screen. A tab
-running in the background is never brought forward just to be photographed, so
-delivery reports usually have the page copy and no screenshot. The popup says
-*A background task ran into a problem* when there are reports you have not
-looked at, and links straight to them.
-
-The page copy includes what had been typed into the form, and **excludes
-anything that signs anybody in**: scripts, hidden fields, password fields and
-anything named like a token are stripped. The last 50 reports are kept, and the
-newest 10 keep their screenshot and page copy. **Copy as text** leaves the
-pictures out; **Download JSON** includes them.
-
-They stay in this browser. Each report is one JSON object with a version number,
-handed to a list of destinations of which this browser is currently the only
-one, so sending them to the web app later is an addition rather than a rewrite.
-
-## Sample mode
-
-The web app is set to one population of work orders at a time, and says which on
-every answer it gives:
-
-- **sample** — only the work orders Dustin marks as tests in AppFolio, whose
-  description is `This is a test work order approved by Dustin.`
-- **live** — only real work orders.
-
-The bar on the AppFolio list states the mode permanently, and a ticked row the
-mode does not admit is refused there, on the row, with the reason — it stays
-ticked rather than disappearing. **If the web app cannot be reached, nothing can
-be sent at all**: the button says *mode unknown* and is disabled, because not
-knowing which population this app is pointed at is not a reason to guess. The
-*Retry status* link recovers it along with the badges.
-
-The extension never remembers the mode, and never carries its own copy of the
-marker text. Both arrive from the web app, and the web app checks everything it
-is sent again regardless.
-
-Two places it matters beyond the list. Buildertrend has no test mode, so a job
-built from a sample is a real Buildertrend job — it gets a `[TEST] ` title
-prefix so those can be found and deleted, and the mode is re-read from the
-server at the moment the job is filled rather than when the row was queued.
-And before an invoice is typed into the AppFolio vendor portal, the extension
-re-reads that work order's description **off the vendor page itself** and stops
-if it disagrees with what the web app holds.
-
-## Previously known limitation, now fixed
-
-`simulateInputTyping` in `content/buildertrend_add_job.js` used to write
-`input.value` directly instead of going through the native property setter, so
-React's value tracker did not see the change and Ant Design fields reverted.
-That was the cause of the recurring "field resetting" problems.
-
-It was left unfixed while Buildertrend's future was undecided. It is decided —
-Buildertrend is ASH's system of record for non-Camelot work orders — so the
-value now goes in through the native setter.
+web app's `tests/integration/extension_test.php` runs `tests/e2e.mjs` against the
+real worker API, and `vendor_extension_test.php` runs `tests/e2e_vendor.mjs`:
+whole vendor chains, with real photographs, killed around every press.

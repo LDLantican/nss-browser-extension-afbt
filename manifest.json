@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
   "name": "NSS Appfolio Helper",
-  "version": "3.3.0",
-  "description": "Sync Appfolio work orders to the ASH web app, deliver approved invoices back to the Appfolio vendor portal, and import them into Buildertrend.",
+  "version": "4.0.0",
+  "description": "Import AppFolio work orders into the ASH web app, and bill approved work back in the AppFolio vendor portal as an ASH delivery worker.",
   "icons": {
     "16": "icons/16.png",
     "48": "icons/48.png",
     "128": "icons/128.png"
   },
-  "permissions": ["storage", "unlimitedStorage", "tabs", "tabGroups", "alarms", "notifications"],
+  "permissions": ["storage", "tabs", "tabGroups", "alarms", "notifications"],
   "optional_host_permissions": [
     "https://alabamasignaturehomes.com/*",
     "https://*.alabamasignaturehomes.com/*",
@@ -32,11 +32,6 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://vendor.appfolio.com/*", "https://buildertrend.net/app/*"],
-      "js": ["content/tab_guard.js"],
-      "run_at": "document_start"
-    },
-    {
       "matches": [
         "https://*.appfolio.com/maintenance/service_requests/work_orders*"
       ],
@@ -54,27 +49,7 @@
     },
     {
       "matches": ["https://vendor.appfolio.com/*"],
-      "js": ["content/appfolio_vendor_invoice.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://vendor.appfolio.com/*"],
       "js": ["adapters/appfolio_vendor/selectors.v1.js", "adapters/appfolio_vendor/page.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://buildertrend.net/app/JobPage/0/*"],
-      "js": ["content/buildertrend_add_job.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://buildertrend.net/app/Landing*"],
-      "js": ["content/buildertrend_landing.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://buildertrend.net/app/Estimate*"],
-      "js": ["content/buildertrend_estimate.js"],
       "run_at": "document_idle"
     }
   ]

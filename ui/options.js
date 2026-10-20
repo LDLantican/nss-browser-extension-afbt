@@ -1,5 +1,5 @@
 /**
- * Settings: the address, the sign-in, and the Buildertrend facts.
+ * Settings: the address, the sign-in, and Troubleshooting.
  *
  * The one genuinely interesting thing here is the permission request.
  *
@@ -10,30 +10,22 @@
  * which is why it is called straight out of the save button's own handler and
  * cannot be moved into the service worker or behind an await of anything slow.
  *
- * The rest is an ordinary form, with one rule: it never stores a password. The
- * password is sent once to be exchanged for a token, and what this browser
- * keeps is the token — revocable from the web app's account page without
- * anybody having to change a password.
+ * The rest is an ordinary form, with one rule: it never stores a password.
+ * Signing in registers this browser as a delivery worker (the web app's
+ * `/api/worker/register`); the password is sent once, and what this browser
+ * keeps is the device token it is exchanged for — revocable from the web app's
+ * account page without anybody having to change a password. That one sign-in
+ * covers both things the extension does: importing from AppFolio's work-order
+ * pages, and working the delivery queue.
  *
- * It is also where Troubleshooting lives: everything the popup deliberately
- * leaves out — the separate invoice and estimate runs with every count they
- * keep, the vendor-page check, the last Buildertrend run reports, and the
- * tab-error reports.
+ * Troubleshooting holds what the popup deliberately leaves out: the
+ * vendor-page check and the rollout ladder's stop switch.
  *
- * Each of those four is a tab, one panel at a time. The hash names the tab, so
- * the popup can open options.html#troubleshooting straight onto it.
+ * Each of the three is a tab, one panel at a time. The hash names the tab, so
+ * a link can open options.html#troubleshooting straight onto it.
  */
 
-import {
-  REASONS,
-  delivery_details,
-  describe_bt_run,
-  describe_estimate_run,
-  describe_probe,
-  describe_reports,
-  scope_note,
-  NEWLINE,
-} from "./describe.js";
+const NEWLINE = String.fromCharCode(10);
 
 const els = {
   alert: document.getElementById("alert"),
@@ -46,10 +38,9 @@ const els = {
   signed_in: document.getElementById("signed-in"),
   who: document.getElementById("who"),
   device: document.getElementById("device"),
-  expires: document.getElementById("expires"),
+  worker_id: document.getElementById("worker-id"),
   account_link_holder: document.getElementById("account-link-holder"),
   sign_out: document.getElementById("sign-out"),
-  recheck: document.getElementById("recheck"),
 
   sign_in_form: document.getElementById("sign-in-form"),
   email: document.getElementById("email"),
@@ -57,40 +48,14 @@ const els = {
   device_name: document.getElementById("device-name"),
   sign_in: document.getElementById("sign-in"),
 
-  bt_enabled: document.getElementById("bt-enabled"),
-  bt_auto_estimates: document.getElementById("bt-auto-estimates"),
-  bt_fields: document.getElementById("bt-fields"),
-  job_type: document.getElementById("job-type"),
-  job_group: document.getElementById("job-group"),
-  bt_client_name: document.getElementById("bt-client-name"),
-  bt_client_row_id: document.getElementById("bt-client-row-id"),
-  bt_cost_code: document.getElementById("bt-cost-code"),
-  bt_save: document.getElementById("bt-save"),
-
-  deliver_now: document.getElementById("deliver-now"),
-  estimates_now: document.getElementById("estimates-now"),
-  run_output: document.getElementById("run-output"),
   probe: document.getElementById("probe"),
-  stop_after_press: document.getElementById("stop-after-press"),
   probe_copy: document.getElementById("probe-copy"),
   probe_output: document.getElementById("probe-output"),
-  bt_troubleshooting: document.getElementById("bt-troubleshooting"),
-  bt_runs: document.getElementById("bt-runs"),
-  bt_runs_empty: document.getElementById("bt-runs-empty"),
-  bt_runs_copy: document.getElementById("bt-runs-copy"),
-  bt_queue_note: document.getElementById("bt-queue-note"),
-  bt_queue_clear: document.getElementById("bt-queue-clear"),
-
-  tab_errors_list: document.getElementById("tab-errors-list"),
-  tab_errors_empty: document.getElementById("tab-errors-empty"),
-  tab_errors_copy: document.getElementById("tab-errors-copy"),
-  tab_errors_download: document.getElementById("tab-errors-download"),
-  tab_errors_clear: document.getElementById("tab-errors-clear"),
+  stop_after_press: document.getElementById("stop-after-press"),
 
   tabs: [...document.querySelectorAll('[role="tab"]')],
   tab_app_dot: document.getElementById("tab-app-dot"),
   tab_sign_in_dot: document.getElementById("tab-sign-in-dot"),
-  tab_errors_count: document.getElementById("tab-errors-count"),
 };
 
 async function ask(type, payload = {}) {
@@ -111,6 +76,37 @@ function say(text, kind = "ok") {
   els.alert.hidden = false;
   els.alert.textContent = text;
   els.alert.className = `notice notice--${kind}`;
+}
+
+/**
+ * A name for this browser, offered as the default device label.
+ *
+ * The manager can overwrite it. It exists because "Unnamed device" in a list of
+ * four is not something anybody can make a revoke decision about, and asking
+ * somebody to invent a name before they can sign in is worse.
+ */
+function suggested_device_name() {
+  const agent = navigator.userAgent || "";
+
+  const browser_name = /Edg\//.test(agent)
+    ? "Edge"
+    : /OPR\//.test(agent)
+      ? "Opera"
+      : /Firefox\//.test(agent)
+        ? "Firefox"
+        : /Chrome\//.test(agent)
+          ? "Chrome"
+          : "Browser";
+
+  const platform = /Windows/.test(agent)
+    ? "Windows"
+    : /Macintosh|Mac OS/.test(agent)
+      ? "Mac"
+      : /Linux/.test(agent)
+        ? "Linux"
+        : "";
+
+  return platform === "" ? browser_name : `${browser_name} on ${platform}`;
 }
 
 /* ---- tabs ------------------------------------------------------------------ */
@@ -141,7 +137,6 @@ function select_tab(name, { focus = false } = {}) {
   current_tab = name;
 
   if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
-  if (name === "troubleshooting") mark_tab_errors_seen();
 }
 
 for (const tab of els.tabs) {
@@ -177,11 +172,11 @@ function trim_trailing_slashes(value) {
 }
 
 async function render() {
-  const state = await ask("STATE");
+  const [state, worker] = await Promise.all([ask("STATE"), ask("WORKER_STATE")]);
 
-  if (state.ok === false) {
+  if (state.ok === false || worker.ok === false) {
     if (current_tab === null) select_tab("app");
-    say(state.error || "Could not read the extension's settings.", "error");
+    say(state.error || worker.error || "Could not read the extension's settings.", "error");
 
     return;
   }
@@ -190,17 +185,10 @@ async function render() {
 
   els.app_url.value = settings.app_url || "";
 
-  els.bt_enabled.checked = settings.buildertrend_enabled !== false;
-  els.bt_auto_estimates.checked = settings.bt_auto_estimates !== false;
-  els.job_type.value = settings.job_type || "";
-  els.job_group.value = settings.job_group || "";
-  els.bt_client_name.value = settings.bt_client_name || "";
-  els.bt_client_row_id.value = settings.bt_client_row_id || "";
-  els.bt_cost_code.value = settings.bt_cost_code || "";
-  toggle_bt_fields();
-  render_troubleshooting(state);
-
-  const signed_in = state.session?.signed_in === true;
+  /* The worker's identity is the only sign-in there is, and it is held
+     against the address it was made for: a different address reads as
+     signed out here, which is what it is. */
+  const signed_in = worker.signed_in === true;
 
   els.tab_app_dot.hidden = Boolean(settings.app_url);
   els.tab_sign_in_dot.hidden = signed_in;
@@ -214,11 +202,11 @@ async function render() {
   els.sign_in_form.hidden = signed_in;
 
   if (signed_in) {
-    els.who.textContent = state.session.user
-      ? `${state.session.user.name} (${state.session.user.email})`
+    els.who.textContent = worker.user
+      ? `${worker.user.name} (${worker.user.email})`
       : "—";
-    els.device.textContent = state.session.device_name || "—";
-    els.expires.textContent = state.session.expires_at || "Does not expire";
+    els.device.textContent = worker.device_name || "—";
+    els.worker_id.textContent = worker.worker_id === null || worker.worker_id === undefined ? "—" : `#${worker.worker_id}`;
 
     /* Built rather than written into the HTML, because the account page's
        address depends on the configured web app. */
@@ -236,8 +224,7 @@ async function render() {
       els.account_link_holder.appendChild(link);
     }
   } else {
-    els.device_name.value =
-      els.device_name.value || state.suggested_device_name || "";
+    els.device_name.value = els.device_name.value || suggested_device_name();
   }
 
   await render_permission();
@@ -263,12 +250,6 @@ async function render_permission() {
     ? "Permitted to talk to this address."
     : "Not yet permitted — save the address again to allow it.";
 }
-
-function toggle_bt_fields() {
-  els.bt_fields.hidden = !els.bt_enabled.checked;
-}
-
-els.bt_enabled.addEventListener("change", toggle_bt_fields);
 
 els.app_form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -347,18 +328,11 @@ els.app_form.addEventListener("submit", async (event) => {
   }
 
   /* Said plainly, because the alternative is a manager who changed an address
-     and appears to have been signed out for no reason. Both effects are
-     deliberate and neither is recoverable by retrying, so they are reported
-     rather than left to be discovered. */
+     and appears to have been signed out for no reason. It is deliberate and
+     not recoverable by retrying, so it is reported rather than left to be
+     discovered. */
   if (saved.moved) {
-    const parts = ["Address saved. This is a different web app, so this device was signed out"];
-
-    if (saved.cleared > 0)
-      parts.push(
-        `and ${saved.cleared} row${saved.cleared === 1 ? "" : "s"} were cleared from the sync list — they described work orders in ${saved.previous_url}`,
-      );
-
-    say(`${parts.join(" ")}. Sign in to carry on.`, "warn");
+    say("Address saved. This is a different web app, so this device was signed out. Sign in to carry on.", "warn");
     select_tab("sign-in");
   } else {
     say("Address saved.", "ok");
@@ -401,12 +375,7 @@ els.sign_in_form.addEventListener("submit", async (event) => {
     return;
   }
 
-  /* The legacy queue is signed in either way; the new delivery worker (3.0)
-     may not be, and the person should hear why rather than find out later. */
-  if (result.worker && result.worker.ok !== true)
-    say(`Signed in. The new delivery worker is not: ${result.worker.error || "the web app refused it."}`, "warn");
-  else say("Signed in. You can close this page.", "ok");
-
+  say("Signed in. You can close this page.", "ok");
   render();
 });
 
@@ -421,47 +390,13 @@ els.sign_out.addEventListener("click", async () => {
   render();
 });
 
-els.recheck.addEventListener("click", async () => {
-  const beat = await ask("HEARTBEAT");
-
-  if (beat.status === "signed_in") say("Still signed in.", "ok");
-  else if (beat.status === "signed_out")
-    say(beat.error || "This device is no longer signed in.", "error");
-  else say(beat.error || "Could not reach the web app.", "warn");
-
-  render();
-});
-
-els.bt_save.addEventListener("click", async () => {
-  const saved = await ask("SAVE_SETTINGS", {
-    patch: {
-      buildertrend_enabled: els.bt_enabled.checked,
-      bt_auto_estimates: els.bt_auto_estimates.checked,
-      job_type: els.job_type.value.trim(),
-      job_group: els.job_group.value.trim(),
-      bt_client_name: els.bt_client_name.value.trim(),
-      bt_client_row_id: els.bt_client_row_id.value.trim(),
-      bt_cost_code: els.bt_cost_code.value.trim(),
-    },
-  });
-
-  if (saved.ok === false) {
-    say(saved.error || "Could not save those settings.", "error");
-
-    return;
-  }
-
-  say("Buildertrend settings saved.", "ok");
-});
-
-/* ---- troubleshooting: run now --------------------------------------------- */
+/* ---- troubleshooting ------------------------------------------------------- */
 
 /**
  * Puts a button in its working state for the length of `work`, then back.
  *
- * Present-tense labels, because both runs and the page check can take the
- * better part of a minute, and a disabled button with its original text on it
- * looks dead for that long.
+ * A present-tense label, because a disabled button with its original text on
+ * it looks dead.
  */
 async function busy(element, label, work) {
   const idle = element.textContent;
@@ -491,77 +426,17 @@ async function copy(text, what) {
   }
 }
 
-els.deliver_now.addEventListener("click", () =>
-  busy(els.deliver_now, "Delivering…", async () => {
-    const result = await ask("DELIVER_NOW");
-    const summary = result.summary || {};
+/** The adapter's probe as plain text, so it survives a paste into a chat. */
+function describe_probe(report) {
+  const adapter = report.adapter || {};
 
-    show_output(els.run_output, "");
-
-    if (result.skipped === "already running") {
-      say("A delivery run is already going. Try again when it finishes.", "warn");
-
-      return;
-    }
-
-    if (result.ok === false) {
-      say(REASONS[result.error] || summary.reason || result.error || "Delivery could not run.", "error");
-
-      return;
-    }
-
-    /* Ahead of `paused`, because there is a filled invoice on a tab waiting for
-       somebody, and "nothing was waiting" would be the opposite of the truth. */
-    if (summary.awaiting_submit === true) {
-      say(summary.reason || "An invoice is filled in and waiting to be submitted.", "warn");
-
-      return;
-    }
-
-    if (summary.paused === true) {
-      say(summary.reason || "Delivery is paused because too much has failed recently.", "warn");
-
-      return;
-    }
-
-    /* A rehearsal's whole output is what it found, so it goes in the block
-       rather than being compressed into the one-line notice. */
-    if (summary.dry_run === true) {
-      show_output(els.run_output, describe_reports(result.reports || []));
-      say(`Rehearsed${scope_note(summary)} without writing anything. Nothing was submitted.`, "ok");
-
-      return;
-    }
-
-    const parts = delivery_details(summary);
-
-    say(
-      parts.length === 0
-        ? `Nothing was waiting to be delivered${scope_note(summary)}.`
-        : parts.join(" · ") + scope_note(summary) + ".",
-      summary.unconfirmed || summary.failed || summary.blocked ? "warn" : "ok",
-    );
-  }));
-
-els.estimates_now.addEventListener("click", () =>
-  busy(els.estimates_now, "Writing…", async () => {
-    const result = await ask("DELIVER_ESTIMATES");
-    const summary = result.summary || {};
-
-    if (result.skipped === "already running")
-      say("An estimate run is already going. Try again when it finishes.", "warn");
-    else if (result.ok === false)
-      say(summary.reason || REASONS[result.error] || result.error || "The estimates could not be written.", "error");
-    else if ((summary.delivered || 0) > 0) say(`${summary.delivered} written to Buildertrend.`, "ok");
-    else if ((summary.rehearsed || 0) > 0) say(`${summary.rehearsed} rehearsed. Nothing was written.`, "ok");
-    else say("Nothing was waiting for an estimate.", "ok");
-
-    /* The run keeps its own account in storage, so the report below is
-       redrawn from there rather than from this answer. */
-    render_troubleshooting(await ask("STATE"));
-  }));
-
-/* ---- troubleshooting: the vendor-page check -------------------------------- */
+  return [
+    `Page: ${report.tab_title || "(untitled)"}`,
+    `appfolio_vendor adapter, ${adapter.kind || "unknown"} page, ${adapter.signed_in ? "signed in" : "signed out"}${adapter.loading ? ", still loading" : ""}`,
+    `  found:   ${(adapter.found || []).join(", ") || "nothing"}`,
+    `  missing: ${(adapter.missing || []).join(", ") || "nothing"}`,
+  ].join(NEWLINE);
+}
 
 els.probe.addEventListener("click", () =>
   busy(els.probe, "Checking…", async () => {
@@ -576,18 +451,7 @@ els.probe.addEventListener("click", () =>
     }
 
     say("");
-
-    const adapter = result.report?.adapter;
-    const adapter_text = adapter
-      ? [
-          "",
-          `appfolio_vendor adapter (3.2), ${adapter.kind} page, ${adapter.signed_in ? "signed in" : "signed out"}`,
-          `  found:   ${adapter.found.join(", ") || "nothing"}`,
-          `  missing: ${adapter.missing.join(", ") || "nothing"}`,
-        ].join(NEWLINE)
-      : `${NEWLINE}appfolio_vendor adapter (3.2): the page did not answer. Reload it and check again.`;
-
-    show_output(els.probe_output, describe_probe(result.report || {}) + NEWLINE + adapter_text);
+    show_output(els.probe_output, describe_probe(result.report || {}));
     els.probe_copy.hidden = false;
   }));
 
@@ -600,252 +464,6 @@ els.stop_after_press.addEventListener("click", () =>
     say(result.ok === false ? result.error || "Could not arm it." : "Armed: the next press is followed by a stop.", result.ok === false ? "warn" : "ok");
   }));
 
-/* ---- troubleshooting: Buildertrend ----------------------------------------- */
-
-/**
- * The last job-creation and estimate runs, and the queue.
- *
- * The job-creation run is only shown when it has something to say about a
- * failure — on a clean run it is noise. An estimate run that touched no job and
- * hit no error has nothing to account for either.
- */
-function render_troubleshooting(state) {
-  const bt_on = state.settings?.buildertrend_enabled !== false;
-
-  els.bt_troubleshooting.hidden = !bt_on;
-  els.estimates_now.hidden = !bt_on;
-
-  if (!bt_on) return;
-
-  const pending = Object.keys(state.bt_pending_links || {}).length;
-  const run = state.bt_last_run;
-  const run_worth_showing =
-    run && ((run.summary?.unidentified || 0) > 0 || (run.summary?.failed || 0) > 0 || pending > 0);
-
-  const estimate = state.bt_last_estimate_run;
-  const estimate_worth_showing =
-    estimate && ((estimate.reports || []).length > 0 || estimate.error || estimate.summary?.reason);
-
-  const text = [
-    run_worth_showing ? describe_bt_run(run) : "",
-    estimate_worth_showing ? describe_estimate_run(estimate) : "",
-  ].filter(Boolean).join(NEWLINE + NEWLINE);
-
-  show_output(els.bt_runs, text);
-  els.bt_runs_empty.hidden = text !== "";
-  els.bt_runs_copy.hidden = text === "";
-
-  const queued = Object.keys(state.bt_queue || {}).length;
-
-  els.bt_queue_note.textContent = queued === 0
-    ? "Nothing is waiting to be added to Buildertrend."
-    : `${queued} work order${queued === 1 ? " is" : "s are"} waiting to be added to Buildertrend. `
-      + "Clearing the queue forgets them here; the work orders stay in the web app.";
-  els.bt_queue_clear.hidden = queued === 0;
-}
-
-els.bt_runs_copy.addEventListener("click", () => copy(els.bt_runs.textContent, "Run report"));
-
-/* Two presses, the same as clearing tab errors, because this forgets work that
-   is written nowhere else in the extension. CLEAR_BT_QUEUE touches the queue
-   only — v1's "Clear All" called storage.local.clear(), which would now sign
-   the manager out as a side effect of tidying a list. */
-let queue_clear_armed = null;
-
-els.bt_queue_clear.addEventListener("click", async () => {
-  if (queue_clear_armed === null) {
-    els.bt_queue_clear.textContent = "Press again to clear the queue";
-    queue_clear_armed = setTimeout(() => {
-      queue_clear_armed = null;
-      els.bt_queue_clear.textContent = "Clear the Buildertrend queue";
-    }, 4000);
-
-    return;
-  }
-
-  clearTimeout(queue_clear_armed);
-  queue_clear_armed = null;
-  els.bt_queue_clear.textContent = "Clear the Buildertrend queue";
-
-  const result = await ask("CLEAR_BT_QUEUE");
-
-  say(`Cleared ${result.removed || 0} from the Buildertrend queue.`, "ok");
-  render_troubleshooting(await ask("STATE"));
-});
-
-/* ---- troubleshooting: tab errors ------------------------------------------- */
-
-/**
- * The reports kept when an owned tab was closed on an error.
- *
- * Read here rather than in the popup because they carry screenshots. Showing
- * the Troubleshooting tab is what counts as having looked, which is what clears
- * the line in the popup — opening the page on another tab is not, because the
- * reports are not on screen.
- */
-let tab_reports = [];
-
-async function render_tab_errors() {
-  const answer = await ask("TAB_ERRORS");
-
-  tab_reports = Array.isArray(answer.reports) ? answer.reports : [];
-
-  els.tab_errors_list.replaceChildren(...tab_reports.map(report_item));
-  els.tab_errors_empty.hidden = tab_reports.length > 0;
-  els.tab_errors_copy.disabled = tab_reports.length === 0;
-  els.tab_errors_download.disabled = tab_reports.length === 0;
-  els.tab_errors_count.hidden = tab_reports.length === 0;
-  els.tab_errors_count.textContent = String(tab_reports.length);
-}
-
-function mark_tab_errors_seen() {
-  ask("TAB_ERRORS_SEEN");
-}
-
-function report_item(report) {
-  const item = document.createElement("li");
-  item.className = "report";
-
-  const head = document.createElement("p");
-  head.className = "report__head";
-  head.textContent = [
-    new Date(report.at).toLocaleString(),
-    report.owner,
-    report.number ? `WO ${report.number}` : "",
-  ].filter(Boolean).join(" · ");
-
-  const error = document.createElement("p");
-  error.className = "report__error";
-  error.textContent = report.error || "(no error text)";
-
-  item.append(head, error);
-
-  if (report.screenshot) {
-    const shot = document.createElement("img");
-    shot.className = "report__shot";
-    shot.src = report.screenshot;
-    shot.alt = `The tab when ${report.number || "the run"} failed`;
-    shot.title = "Open full size";
-    shot.addEventListener("click", () => open_blob(report.screenshot));
-    item.append(shot);
-  }
-
-  const facts = document.createElement("dl");
-  facts.className = "facts";
-
-  for (const [label, value] of report_facts(report)) {
-    const term = document.createElement("dt");
-    term.textContent = label;
-
-    const detail = document.createElement("dd");
-    detail.textContent = value;
-
-    facts.append(term, detail);
-  }
-
-  item.append(facts);
-
-  if (report.snapshot) {
-    const actions = document.createElement("p");
-    actions.className = "card__actions";
-
-    const download = document.createElement("button");
-    download.type = "button";
-    download.className = "btn btn--quiet";
-    download.textContent = "Download page copy";
-    download.addEventListener("click", () =>
-      save(`tab-error-${report.id}.html`, report.snapshot, "text/html"));
-
-    actions.append(download);
-    item.append(actions);
-  }
-
-  return item;
-}
-
-/** Label/value pairs, shared by the card and by Copy as text. */
-function report_facts(report) {
-  return [
-    ["Doing", report.label],
-    ["Step", report.step],
-    ["State", report.state],
-    ["Run", report.run],
-    ["Page", report.url],
-    ["Title", report.title],
-    ["Closed by", report.tab_closed_by_person ? "a person, while it ran" : ""],
-    ["Screenshot", report.screenshot ? "kept" : report.screenshot_note],
-    ["Page copy", report.snapshot ? `kept (${Math.round(report.snapshot.length / 1024)} KB)` : report.snapshot_note],
-    ["Detail", report.detail ? JSON.stringify(report.detail) : ""],
-    ["Version", report.extension_version],
-  ].filter(([, value]) => value);
-}
-
-function reports_as_text() {
-  return tab_reports
-    .map((report) =>
-      [
-        `${new Date(report.at).toISOString()}  ${report.owner}${report.number ? `  WO ${report.number}` : ""}`,
-        `error      : ${report.error || "(none)"}`,
-        ...report_facts(report).map(([label, value]) => `${label.toLowerCase().padEnd(11)}: ${value}`),
-      ].join("\n"))
-    .join("\n\n");
-}
-
-/** A data: URL cannot be opened as a tab, so it goes through a blob. */
-async function open_blob(data_url) {
-  const blob = await (await fetch(data_url)).blob();
-
-  window.open(URL.createObjectURL(blob), "_blank");
-}
-
-function save(filename, content, type) {
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(new Blob([content], { type }));
-  link.download = filename;
-  link.click();
-
-  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
-}
-
-els.tab_errors_copy.addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(reports_as_text());
-    say("Tab-error reports copied, without screenshots or page copies.", "ok");
-  } catch {
-    say("Could not copy to the clipboard.", "error");
-  }
-});
-
-els.tab_errors_download.addEventListener("click", () => {
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-
-  save(`nss-tab-errors-${stamp}.json`, JSON.stringify(tab_reports, null, 2), "application/json");
-});
-
-/* Two presses, because this deletes the only copy of what those tabs showed. */
-let clear_armed = null;
-
-els.tab_errors_clear.addEventListener("click", async () => {
-  if (clear_armed === null) {
-    els.tab_errors_clear.textContent = "Press again to clear them all";
-    clear_armed = setTimeout(() => {
-      clear_armed = null;
-      els.tab_errors_clear.textContent = "Clear";
-    }, 4000);
-
-    return;
-  }
-
-  clearTimeout(clear_armed);
-  clear_armed = null;
-  els.tab_errors_clear.textContent = "Clear";
-
-  await ask("CLEAR_TAB_ERRORS");
-  await render_tab_errors();
-  say("Tab-error reports cleared.", "ok");
-});
-
 if (tab_from_hash()) select_tab(tab_from_hash());
 
 render();
-render_tab_errors();

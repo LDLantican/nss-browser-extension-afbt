@@ -88,20 +88,7 @@ body {
   background: var(--warn);
 }
 
-.tab__count {
-  min-width: 18px;
-  padding: 0 5px;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 18px;
-  text-align: center;
-  color: var(--bad);
-  background: var(--bad-soft);
-  border-radius: 9px;
-}
-
 .tab__dot[hidden],
-.tab__count[hidden],
 [role="tabpanel"][hidden] {
   display: none;
 }
@@ -157,10 +144,6 @@ body {
   margin-top: 4px;
 }
 
-#bt-fields[hidden] {
-  display: none;
-}
-
 .field__hint--lead {
   margin-bottom: 12px;
 }
@@ -192,39 +175,6 @@ body {
 /* Long tokens and email addresses must not push the grid wider than the page. */
 .facts dd {
   overflow-wrap: anywhere;
-}
-
-/* ---- diagnostics --------------------------------------------------------- */
-
-.reports {
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.report {
-  padding: 12px 0;
-  border-top: 1px solid var(--line);
-}
-
-.report__head {
-  margin-bottom: 4px;
-  font-weight: 700;
-}
-
-.report__error {
-  margin-bottom: 8px;
-  color: var(--bad);
-  overflow-wrap: anywhere;
-}
-
-.report__shot {
-  display: block;
-  width: 100%;
-  margin-bottom: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  cursor: zoom-in;
 }
 
 /* ---- troubleshooting ----------------------------------------------------- */

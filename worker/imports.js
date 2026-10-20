@@ -93,9 +93,9 @@ export function create_imports({ client }) {
 
   return {
     /**
-     * What the web app holds for these numbers: the job each was imported as,
-     * or that legacy still has it open. Plus the connection's mode and the test
-     * marker, for the page to refuse rows by.
+     * What the web app holds for these numbers: the job each was imported as.
+     * Plus the connection's mode and the test marker, for the page to refuse
+     * rows by.
      *
      * @param {{host: string, company: string}} page
      */
@@ -113,7 +113,6 @@ export function create_imports({ client }) {
           connection: answer.body.connection,
           scope: scope_of(answer.body),
           work_orders: answer.body.work_orders || {},
-          legacy: answer.body.legacy || {},
         };
       });
     },

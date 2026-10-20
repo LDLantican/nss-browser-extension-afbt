@@ -13,8 +13,7 @@
  * anything is pressed instead of per row afterwards.
  *
  * Since 3.1.0 (the web app's roadmap phase 8) the button is Import, into the
- * new work-order system, and the "Queue for Buildertrend" button is gone; the
- * list page's header says why.
+ * web app's work-order system; the list page's header says how.
  */
 
 (() => {
@@ -131,16 +130,9 @@
       }
 
       const server = (answer.work_orders || {})[app.work_order.number] || null;
-      const legacy = (answer.legacy || {})[app.work_order.number] || null;
 
-      if (server) {
-        app.paint(app.job_label(server), server.status === "approved" ? "done" : "present");
-      } else if (legacy) {
-        app.paint(`in legacy · ${legacy.status_label || legacy.status}`, "legacy");
-        app.say("The old system still has this work order open, so it cannot be imported until it is finished or cancelled there.", "warn");
-      } else {
-        app.paint("not imported", "absent");
-      }
+      if (server) app.paint(app.job_label(server), server.status === "approved" ? "done" : "present");
+      else app.paint("not imported", "absent");
     },
 
     async send() {

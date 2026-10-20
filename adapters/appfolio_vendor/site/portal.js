@@ -10,7 +10,7 @@
  * (tests/support/fake_vendor.js).
  *
  * The shape follows what was read off the live portal on 2026-10-16
- * (docs/browser-extension.md, "The appfolio_vendor adapter"): a work order has
+ * (docs/vendor-adapter.md, "The appfolio_vendor adapter"): a work order has
  * a URL id that is not its number, a status from the portal's own vocabulary,
  * a description, an optional maintenance limit, notes, and submitted invoices
  * listed as `Billable_Item_invoice_<number>-<n>.pdf` (an uploaded PDF is `Billable_Item_<n>.pdf`).

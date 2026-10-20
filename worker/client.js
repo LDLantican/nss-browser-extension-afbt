@@ -23,8 +23,8 @@
  * network at all and the development server lives.
  *
  * Nothing here throws for an HTTP status: every call resolves to
- * `{ ok, status, body }` and the caller decides what a status means, as
- * background/api.js does. A request that got no answer rejects as
+ * `{ ok, status, body }` and the caller decides what a status means. A
+ * request that got no answer rejects as
  * NetworkError, and a browser with no worker identity as NotSignedIn.
  */
 
@@ -41,8 +41,9 @@ const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 /**
  * The address to call, or null with the reason it may not be called.
  *
- * Trailing slashes off, as background/api.js normalizes it, so the identity
- * stored against an address is compared the same way the settings are.
+ * Trailing slashes off, as background/api.js's normalize_base() does, so the
+ * identity stored against an address is compared the same way the settings
+ * are.
  */
 export function check_base(url) {
   const base = String(url || "").trim().replace(/\/+$/, "");

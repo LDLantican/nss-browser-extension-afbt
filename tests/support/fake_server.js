@@ -68,9 +68,8 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
       company: "Camelot Properties, LLC",
     },
     marker: "This is a test work order approved by Dustin.",
-    /** number => the job an import made, and numbers legacy still has open. */
+    /** number => the job an import made. */
     imported: new Map(),
-    legacy: new Map(),
     next_job: 1,
     killed_adapters: [],
     deliveries: [],
@@ -150,7 +149,7 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
   /**
    * The import's two endpoints (docs/worker-api.md, "Importing"): the
    * connection's gates, its scope by the marker, created or unchanged by
-   * number, legacy refused. Enough of the web app's rules for the extension
+   * number. Enough of the web app's rules for the extension
    * to be unable to tell; the rules themselves are proven in the web app's
    * tests/integration/import_test.php.
    */
@@ -171,14 +170,10 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
 
     if (path.endsWith("/lookup")) {
       const work_orders = {};
-      const legacy = {};
 
-      for (const number of body.numbers || []) {
-        if (job(number)) work_orders[number] = job(number);
-        else if (server.legacy.has(number)) legacy[number] = { status: "assigned", status_label: "Assigned" };
-      }
+      for (const number of body.numbers || []) if (job(number)) work_orders[number] = job(number);
 
-      return [200, { connection: pm.slug, scope: pm.scope, marker: server.marker, work_orders, legacy }];
+      return [200, { connection: pm.slug, scope: pm.scope, marker: server.marker, work_orders }];
     }
 
     if (!Array.isArray(body.records)) return [400, { error: "Send the work orders as a list." }];
@@ -193,7 +188,6 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
       if (number === "" || String(record?.street || "") === "") result = { status: "invalid", errors: ["Number and Street are required."] };
       else if (marked !== (pm.scope === "test")) result = { status: "out_of_scope", errors: ["Not this connection's mode."] };
       else if (job(number)) result = { status: "unchanged", work_order: job(number) };
-      else if (server.legacy.has(number)) result = { status: "legacy", errors: [`Work order ${number} is still open in the legacy system.`] };
       else {
         const public_id = `WO-${String(server.next_job++).padStart(6, "0")}`;
 

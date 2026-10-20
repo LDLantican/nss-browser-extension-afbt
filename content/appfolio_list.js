@@ -56,25 +56,17 @@
  *
  * ## Import, which replaced Sync (3.1.0, the web app's roadmap phase 8)
  *
- * The button used to be "Sync", which put work orders into the web app's
- * legacy tables and queued each one for Buildertrend. It is now **Import**:
- * the ticked rows go to the new work-order system, through this browser's
- * delivery-worker sign-in (worker/imports.js), on the property-manager
- * connection the web app names. The owner chose to replace Sync rather than
- * sit beside it.
+ * The ticked rows go to the web app's work-order system through this
+ * browser's delivery-worker sign-in (worker/imports.js), on the
+ * property-manager connection whose host this page is. Since 4.0.0 that is
+ * the only thing this page sends: the old Sync, and the Buildertrend queue it
+ * fed, left with the legacy runtime.
  *
- * - **The mode is the connection's.** Test or live is now decided by that
- *   connection, not by the installation-wide setting legacy reads. The bar
- *   says which, as it always did.
- * - **A badge says what the new system holds:** the job's WO- number and
- *   status, "in legacy" for a number the old system still has open (the
- *   import refuses those, so one job is never tracked twice), or "not
- *   imported".
- * - **Buildertrend is no longer queued from here.** Recording a Buildertrend
- *   job against a work order is a legacy feature, keyed on the legacy tables,
- *   and the new system has no Buildertrend adapter. Its queue and its runner
- *   are untouched; only the automatic queueing from this page went.
- * - **Re-importing is safe.** A number the new system already holds is
+ * - **The mode is the connection's.** Test or live is decided by that
+ *   connection, and the bar says which.
+ * - **A badge says what the web app holds:** the job's WO- number and
+ *   status, or "not imported".
+ * - **Re-importing is safe.** A number the web app already holds is
  *   refreshed (its description and unit brought up to date), never doubled;
  *   one whose street changed is flagged for a person and left alone.
  */
@@ -91,8 +83,6 @@
 
     /** The last row clicked, so shift-click has a range to work from. */
     anchor: null,
-
-    settings: {},
 
     message: null,
 
@@ -115,9 +105,6 @@
     async init() {
       const list = await nss.query_element(nss.SELECTORS.list);
       if (!list) return;
-
-      const state = await nss.ask("STATE");
-      app.settings = state?.settings || {};
 
       app.render_rows();
       app.watch_selection(list);
@@ -200,10 +187,10 @@
      *   native setter + change event       2 Selected -> 2 Selected   (box unticked)
      *   box.click()                        2 Selected -> 1 Selected
      *
-     * So this is **not** the React value-tracker problem that
-     * content/buildertrend_add_job.js had, and the native-setter fix that cured
-     * that one does nothing here: Appfolio's counter is driven by a click
-     * handler, not by a controlled input's value. Only a click event updates it.
+     * So this is **not** the React value-tracker problem a controlled input
+     * has, and the native-setter fix that cures that one does nothing here:
+     * Appfolio's counter is driven by a click handler, not by a controlled
+     * input's value. Only a click event updates it.
      *
      * The cost is that every programmatic tick now dispatches a real click that
      * bubbles to our own listener too, which is why on_click() ignores anything
@@ -321,29 +308,12 @@
       }
 
       const found = answer.work_orders || {};
-      const legacy = answer.legacy || {};
 
       for (const number of numbers) {
         const server = found[number] || null;
 
-        if (server) {
-          app.paint_badge(number, app.job_label(server), server.status === "approved" ? "done" : "present");
-
-          continue;
-        }
-
-        if (legacy[number]) {
-          app.paint_badge(
-            number,
-            `in legacy · ${legacy[number].status_label || legacy[number].status}`,
-            "legacy",
-            "The old system still has this work order open, so it cannot be imported until it is finished or cancelled there.",
-          );
-
-          continue;
-        }
-
-        app.paint_badge(number, "not imported", "absent");
+        if (server) app.paint_badge(number, app.job_label(server), server.status === "approved" ? "done" : "present");
+        else app.paint_badge(number, "not imported", "absent");
       }
 
       app.render_bar(answer);
@@ -678,9 +648,6 @@
         case "flagged":
           app.paint_badge(number, "address differs — not changed", "error", why);
           return { done: false, why: "its address differs from the job already imported" };
-        case "legacy":
-          app.paint_badge(number, "in legacy", "legacy", why);
-          return { done: false, why: "still open in the legacy system" };
         case "out_of_scope":
           app.paint_badge(number, app.scope?.mode === "sample" ? "not a test work order" : "test work order", "error", why);
           return { done: false, why: why || "outside the connection's mode" };

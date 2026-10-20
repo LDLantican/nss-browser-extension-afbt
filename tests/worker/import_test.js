@@ -85,9 +85,8 @@ export default {
     t.equal(world.server.requests.length, before, "a page with no host was asked about anyway");
   },
 
-  async "the lookup hands back the connection's mode, the jobs and legacy's open numbers"(t) {
+  async "the lookup hands back the connection's mode and the jobs"(t) {
     const { world } = await world_with_job();
-    world.server.legacy.set("18002-1", true);
 
     const imports = imports_for(world);
     const sent = await imports.send([record(1)], PAGE);
@@ -97,7 +96,7 @@ export default {
 
     t.deep(answer.scope, { mode: "sample", marker: MARKER }, "a test connection reads as sample mode to the page");
     t.equal(answer.work_orders["18001-1"].public_id, "WO-000001");
-    t.equal(answer.legacy["18002-1"].status, "assigned");
+    t.equal(answer.work_orders["18002-1"] ?? null, null);
     t.equal(answer.work_orders["18003-1"] ?? null, null);
     t.deep(world.server.requests.at(-1).body.numbers, ["18001-1", "18002-1", "18003-1"], "duplicates and blanks were sent");
   },

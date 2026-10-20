@@ -2,13 +2,10 @@
    The popup
    =============================================================================
 
-   A fixed width, because a popup that sizes to its content jumps about as the
-   queue changes — v1 used `width: max-content` and the panel changed width
-   whenever a long address arrived. 380px fits a work-order number, a status
-   pill and an action on one line, which is the row this list is made of.
-
-   The height is capped and the lists scroll rather than the body, so the header
-   and the footer stay put while forty rows go past.
+   A fixed width, because a popup that sizes to its content jumps about as its
+   text changes — v1 used `width: max-content` and the panel changed width
+   whenever a long line arrived. 380px fits a connection's name and the reason
+   it cannot be worked on one or two lines.
    ========================================================================== */
 
 body {
@@ -46,7 +43,7 @@ main[hidden] {
 }
 
 .who {
-  padding: 8px 12px 0;
+  padding: 8px 12px;
   font-size: 11px;
   color: var(--ink-faint);
   overflow: hidden;
@@ -56,80 +53,6 @@ main[hidden] {
 
 .who[hidden] {
   display: none;
-}
-
-/* ---- the one-line answer ------------------------------------------------- */
-
-/* The first thing read, and most days the only thing. Sized up from the body
-   text so "All caught up" can be taken in without reading anything else. */
-.status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 12px 10px;
-  padding: 10px 12px;
-  border: 1px solid;
-  border-radius: var(--radius);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.status::before {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  font-size: 11px;
-  color: #fff;
-}
-
-.status--ok {
-  background: var(--good-soft);
-  border-color: #6ee7b7;
-  color: var(--good);
-}
-
-.status--ok::before {
-  content: "\2713";
-  background: var(--good);
-}
-
-.status--warn {
-  background: var(--warn-soft);
-  border-color: #fcd34d;
-  color: var(--warn);
-}
-
-.status--warn::before {
-  content: "!";
-  background: var(--warn);
-}
-
-.status--busy {
-  background: var(--paper);
-  border-color: var(--line);
-  color: var(--ink-soft);
-}
-
-.status--busy::before {
-  content: "";
-  border: 2px solid var(--line);
-  border-top-color: var(--ink-soft);
-  animation: spin 0.9s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .status--busy::before {
-    animation: none;
-  }
 }
 
 /* ---- panels -------------------------------------------------------------- */
@@ -165,94 +88,26 @@ main[hidden] {
   display: none;
 }
 
-/* Folded by default: what went through is reassurance, not work. */
-.recent summary {
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--ink-soft);
-}
+/* ---- the delivery worker ------------------------------------------------- */
 
-.recent summary:hover {
-  color: var(--ink);
-}
-
-/* ---- job rows ------------------------------------------------------------ */
-
-.jobs {
-  list-style: none;
-  max-height: 260px;
-  overflow-y: auto;
-  margin-top: 4px;
-}
-
-.jobs:empty {
-  display: none;
-}
-
-.job {
-  padding: 8px 0;
-  border-top: 1px solid var(--line);
-}
-
-.job:first-child {
-  border-top: 0;
-}
-
-.job__head {
+.worker__switch {
   display: flex;
-  flex-wrap: wrap;
+  gap: 0.5rem;
   align-items: center;
-  gap: 8px;
+  font-weight: 600;
 }
 
-.job__number {
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
+.worker .field__hint {
+  margin-top: 6px;
 }
 
-/* The row's action sits at the right without needing a spacer. Whatever
-   follows it (a quiet Remove) sits beside it. */
-.job__head > .job__go,
-.job__head > a.link {
-  margin-left: auto;
+.worker__connections {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
 }
 
-.job__go {
-  padding: 3px 8px;
-  font-size: 11px;
-}
-
-.job__head > a.link {
-  font-size: 12px;
-}
-
-.job__head .link--danger {
-  font-size: 11px;
-}
-
-/* Where the job stands outside the web app: BT job, invoice, estimate. Under
-   the head rather than in it, because three pills beside a number and an Open
-   link wrap unpredictably at popup width. */
-.job__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
-}
-
-.job__where {
-  font-size: 12px;
-  color: var(--ink-soft);
-}
-
-/* The reason a row failed, and the thing a manager is actually reading. Given
-   room to wrap rather than truncated: "already exists at X but arrived for Y"
-   is useless cut in half. */
-.job__why {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--bad);
+.worker__connections li + li {
+  margin-top: 0.25rem;
 }
 
 /* ---- footer -------------------------------------------------------------- */
@@ -266,34 +121,4 @@ main[hidden] {
 
 .foot[hidden] {
   display: none;
-}
-
-.foot .link {
-  font-size: 11px;
-}
-
-.foot__problem {
-  margin-top: 6px;
-  color: var(--warn);
-}
-
-.foot__problem[hidden] {
-  display: none;
-}
-
-/* The 3.0 delivery worker panel. */
-.worker__switch {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  font-weight: 600;
-}
-
-.worker__connections {
-  margin: 0.5rem 0 0;
-  padding-left: 1.1rem;
-}
-
-.worker__connections li + li {
-  margin-top: 0.25rem;
 }
