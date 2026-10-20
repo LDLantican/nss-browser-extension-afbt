@@ -78,13 +78,18 @@ settings never signs anybody out.
 **Since 3.1.0 the AppFolio work-order list imports; it no longer syncs.** The
 button at the bottom of the list, and the one on a single work order's page, is
 **Import**. It sends the ticked work orders to the web app's new work-order
-system, through the delivery-worker sign-in (`worker/imports.js`), on the
-property-manager connection the web app names. Legacy Sync, and the
+system, through the delivery-worker sign-in (`worker/imports.js`). Legacy Sync, and the
 Buildertrend job it queued for each row, are no longer started from AppFolio's
 pages. Recording a Buildertrend job is keyed on the web app's legacy tables, and
 the new system has no Buildertrend adapter. The Buildertrend queue, its runner
 and everything in the popup are unchanged.
 
+- **The page picks the connection (3.3.0).** Every import and badge lookup
+  carries the AppFolio page's host, read off the tab that asked, and the company
+  name the page shows. The web app imports through the connection for that host,
+  and refuses a page signed in to another company. A refused lookup says why on
+  the bar, not only in a badge's tooltip, and the bar counts what an import did
+  apart: *1 imported, 2 already imported*.
 - **The connection decides test or live.** Each property-manager connection in
   the web app is in `test` or `live` mode. In test mode only Dustin's test work
   orders are imported; in live mode only real ones. The bar states it, and a
@@ -307,7 +312,7 @@ web app's `tests/integration/extension_test.php` runs the same loop against the
 real worker API, and `vendor_extension_test.php` runs `tests/e2e_vendor.mjs`: whole
 vendor chains, with real photographs, killed around every press.
 
-**The web app's `DELIVERY_EXTENSION_VERSION` must say `3.2.0`** once this
+**The web app's `DELIVERY_EXTENSION_VERSION` must say `3.3.0`** once this
 version is loaded, or both queues and the import answer 426 — the legacy drain included.
 
 ## The tabs it opens

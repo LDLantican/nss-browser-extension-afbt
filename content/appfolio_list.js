@@ -306,7 +306,7 @@
 
       app.paint_badges("checking…", "loading");
 
-      const answer = await nss.ask("IMPORT_STATUSES", { numbers });
+      const answer = await nss.ask("IMPORT_STATUSES", { numbers, company: nss.company() });
 
       app.scope = answer?.ok ? answer.scope || null : null;
 
@@ -366,7 +366,11 @@
         case "connection_disabled":
         case "connection_paused":
         case "import_disabled": return "import is off";
-        case "no_connection": return "no AppFolio connection";
+        case "unknown_host": return "no connection for this AppFolio";
+        case "wrong_account": return "signed in to another company";
+        case "account_unreadable": return "company not shown";
+        case "account_unset":
+        case "no_client": return "connection not set up";
         case "outdated": return "extension out of date";
         case "forbidden": return "not permitted";
         default: return "status unknown";
@@ -403,7 +407,10 @@
         document.body.appendChild(bar);
       }
 
-      if (status_answer !== undefined) bar.dataset.statusError = status_answer?.ok ? "" : "1";
+      if (status_answer !== undefined) {
+        bar.dataset.statusError = status_answer?.ok ? "" : "1";
+        app.status_error = status_answer?.ok ? "" : status_answer?.error || "The web app did not say why.";
+      }
 
       const count = app.selected_rows().length;
       const mode = app.scope?.mode === "sample" || app.scope?.mode === "live" ? app.scope.mode : null;
@@ -452,6 +459,13 @@
         retry.textContent = "Retry status";
         retry.addEventListener("click", () => app.load_statuses());
         left.appendChild(retry);
+
+        /* The reason, in words on the bar: a badge's tooltip is not something
+           a person finds, and "import is off" alone does not say what to do. */
+        const reason = document.createElement("span");
+        reason.className = "nss-bar__reason";
+        reason.textContent = app.status_error || "";
+        left.appendChild(reason);
       }
 
       const right = document.createElement("div");
@@ -589,7 +603,7 @@
         return;
       }
 
-      const answer = await nss.ask("IMPORT", { records: work_orders });
+      const answer = await nss.ask("IMPORT", { records: work_orders, company: nss.company() });
 
       app.busy = false;
 
@@ -597,7 +611,7 @@
          the server took, or already had, is unticked. One it refused stays
          ticked, because it still needs a person and un-ticking it would hide
          that. */
-      const outcome = { done: 0, problems: [] };
+      const outcome = { done: 0, created: 0, refreshed: 0, unchanged: 0, problems: [] };
 
       for (const result of answer?.results || []) {
         const row = handed_over[result.index];
@@ -606,6 +620,7 @@
         const painted = app.paint_result(row.number, result);
         if (painted.done) {
           outcome.done++;
+          if (result.status in outcome) outcome[result.status]++;
           app.set_checked(row, false);
         } else {
           outcome.problems.push(`${row.number}: ${painted.why}`);
@@ -621,7 +636,14 @@
 
       const notes = [];
 
-      if (outcome.done > 0) notes.push(`${outcome.done} imported.`);
+      /* Said apart: "3 imported." for three rows the web app already had was
+         the 3.1.0 wording, and it read as three new jobs. */
+      const done = [
+        outcome.created > 0 ? `${outcome.created} imported` : "",
+        outcome.refreshed > 0 ? `${outcome.refreshed} updated from AppFolio` : "",
+        outcome.unchanged > 0 ? `${outcome.unchanged} already imported` : "",
+      ].filter(Boolean);
+      if (done.length > 0) notes.push(`${done.join(", ")}.`);
       if (!answer?.ok) notes.push(answer?.error || "The web app did not answer.");
       if (outcome.problems.length > 0) notes.push(`Not imported — ${outcome.problems.join("; ")}.`);
       if (refused.length > 0) notes.push(app.refusal_reason(refused.length) + ` ${refused.join(", ")}.`);

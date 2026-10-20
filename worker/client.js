@@ -287,7 +287,7 @@ export function create_client(env) {
     },
 
     /* The AppFolio import (phase 8): not deliveries, but the same credentials. */
-    import_records: (connection, records) => call("/api/worker/imports", { connection, records }),
-    import_lookup: (connection, numbers) => call("/api/worker/imports/lookup", { connection, numbers }),
+    import_records: ({ host, company }, records) => call("/api/worker/imports", { host, company, records }),
+    import_lookup: ({ host, company }, numbers) => call("/api/worker/imports/lookup", { host, company, numbers }),
   };
 }

@@ -118,7 +118,7 @@
     },
 
     async load_status() {
-      const answer = await nss.ask("IMPORT_STATUSES", { numbers: [app.work_order.number] });
+      const answer = await nss.ask("IMPORT_STATUSES", { numbers: [app.work_order.number], company: nss.company() });
 
       app.scope = answer?.ok ? answer.scope || null : null;
       app.paint_scope();
@@ -152,7 +152,7 @@
       app.say("Importing…");
       app.paint("importing…", "loading");
 
-      const answer = await nss.ask("IMPORT", { records: [app.work_order] });
+      const answer = await nss.ask("IMPORT", { records: [app.work_order], company: nss.company() });
       const result = (answer?.results || [])[0] || null;
 
       app.busy = false;

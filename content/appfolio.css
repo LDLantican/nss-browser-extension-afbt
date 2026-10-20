@@ -188,6 +188,13 @@
   color: #fff;
 }
 
+/* Why the status could not be read (3.3.0): said on the bar, since a badge's
+   tooltip is not something a person finds. */
+.nss-bar__reason {
+  color: #fca5a5;
+  font-size: 12px;
+}
+
 .nss-bar__go {
   padding: 8px 16px;
   border: 0;

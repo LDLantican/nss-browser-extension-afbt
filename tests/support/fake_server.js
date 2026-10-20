@@ -63,6 +63,9 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
       paused: false,
       import_enabled: true,
       scope: "test",
+      /* The page's host is the key and the company it names the check (phase 10). */
+      host: "camelotproperties.appfolio.com",
+      company: "Camelot Properties, LLC",
     },
     marker: "This is a test work order approved by Dustin.",
     /** number => the job an import made, and numbers legacy still has open. */
@@ -154,7 +157,13 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
   function imports(path, body) {
     const pm = server.pm;
 
-    if (body.connection !== pm.slug) return [422, { error: `There is no connection called “${body.connection}”.` }];
+    const company_key = (name) => String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+    if (String(body.host || "").toLowerCase() !== pm.host) return [422, { error: `No connection imports from ${body.host}.`, reason: "unknown_host" }];
+    if (String(body.company || "").trim() === "")
+      return [409, { error: "The page did not show which company it is signed in to, so nothing was imported.", reason: "account_unreadable" }];
+    if (company_key(body.company) !== company_key(pm.company))
+      return [409, { error: `This page is signed in to ${body.company}, not ${pm.company}.`, reason: "wrong_account" }];
     if (!pm.enabled) return [409, { error: `${pm.name} is switched off.`, reason: "connection_disabled" }];
     if (!pm.import_enabled) return [409, { error: `Importing is switched off for ${pm.name}.`, reason: "import_disabled" }];
 

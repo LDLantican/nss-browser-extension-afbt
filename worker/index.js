@@ -25,7 +25,7 @@ const ALARM = "ash-worker-tick";
 
 const env = create_chrome_env();
 const runtime = create_runtime(env, create_registry());
-const imports = create_imports({ env, client: runtime.rt.client, refresh: () => runtime.heartbeat() });
+const imports = create_imports({ client: runtime.rt.client });
 
 /**
  * The two messages a content script may send here, and from where: the
@@ -97,9 +97,14 @@ const handlers = {
     return { ok: true };
   },
 
-  /* The AppFolio import (phase 8): the rows' status, and the rows themselves. */
-  IMPORT_STATUSES: ({ numbers }) => imports.lookup(Array.isArray(numbers) ? numbers : []),
-  IMPORT: ({ records }) => imports.send(Array.isArray(records) ? records : []),
+  /* The AppFolio import (phase 8): the rows' status, and the rows themselves.
+     Which connection is the page's host (3.3.0), taken from the tab Chrome says
+     sent the message rather than from anything the page wrote; the company is
+     what the page shows, for the web app to check. */
+  IMPORT_STATUSES: ({ numbers, company }, sender) =>
+    imports.lookup(Array.isArray(numbers) ? numbers : [], { host: host_of(sender), company }),
+  IMPORT: ({ records, company }, sender) =>
+    imports.send(Array.isArray(records) ? records : [], { host: host_of(sender), company }),
 
   /* A vendor-portal page loaded in this browser, and said whether it is
      signed in (adapters/appfolio_vendor/page.js). Kept as the adapter's
@@ -112,6 +117,15 @@ const handlers = {
     return { ok: true };
   },
 };
+
+/** The host of the page a message came from, as Chrome reports the sender. */
+function host_of(sender) {
+  try {
+    return new URL(sender?.url || sender?.tab?.url || "").host;
+  } catch {
+    return "";
+  }
+}
 
 function sender_allowed(type, sender) {
   if (from_extension_page(sender)) return true;
@@ -132,7 +146,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return false;
   }
 
-  Promise.resolve(handler(message.payload ?? {}))
+  Promise.resolve(handler(message.payload ?? {}, sender))
     .then((result) => respond(result ?? { ok: true }))
     .catch((error) => respond({ ok: false, error: error?.message || "Something went wrong." }));
 

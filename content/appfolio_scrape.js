@@ -58,6 +58,12 @@
        these. */
     selected_count: ".js-num-selected-text",
 
+    /* The company the page is signed in to, which AppFolio prints on every pm
+       page without a click: the sidebar, and the account menu's header (both
+       "Camelot Properties, LLC", read 2026-10-15). The web app checks it
+       against the connection the page's host names (3.3.0). */
+    company: [".start-sidebar-company-name", ".dropdown-menu-section .dropdown-header"],
+
     detail_body: ".js-work-order-body__details",
     detail_header: ".js-work-order-header-left.work-order-header__left",
     detail_description: ".js-work-order-description",
@@ -434,6 +440,16 @@
       .toLowerCase();
   }
 
+  /** The company this AppFolio page names, or "" when it names none. */
+  function company() {
+    for (const selector of SELECTORS.company) {
+      const name = collapse(document.querySelector(selector)?.textContent || "");
+      if (name !== "") return name;
+    }
+
+    return "";
+  }
+
   /** Ask the service worker something, and never throw at the caller. */
   async function ask(type, payload = {}) {
     try {
@@ -462,6 +478,7 @@
     scope_admits,
     query_element,
     wait_for,
+    company,
     ask,
   };
 })();

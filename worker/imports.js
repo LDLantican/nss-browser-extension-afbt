@@ -15,15 +15,15 @@
  * Re-importing is safe by design: the server finds a number it already holds
  * and refreshes it instead of creating a second job.
  *
- * ## Which connection
+ * ## Which connection (3.3.0)
  *
- * The web app names its connections. The pm one is whichever runs the
- * `appfolio_pm` adapter, and it is learned from the heartbeat's answer, which
- * the runtime keeps in storage. A browser that has not had a heartbeat answer
- * yet (just signed in, or the list was cleared) runs one tick first, which
- * heartbeats. With several pm connections the first is used. There is one,
- * Camelot's, and a second AppFolio account would need the page's host matched
- * to its connection, which no connection records yet.
+ * **The page decides, not this browser.** Every request carries the host of
+ * the AppFolio page it came from — read off the sender's tab by the service
+ * worker, not taken from the page's word — and the company name that page
+ * shows. The web app imports through the pm connection whose host it is, and
+ * refuses a page signed in to a different company than that connection's.
+ * Until 3.3.0 this picked the first pm connection the heartbeat had named,
+ * which was right only while there was one property manager.
  *
  * ## Test or live
  *
@@ -34,9 +34,6 @@
  */
 
 import { NetworkError, NotSignedIn } from "./errors.js";
-import { CONNECTIONS_KEY } from "./runtime.js";
-
-export const PM_ADAPTER = "appfolio_pm";
 
 /** The server's own ceilings (integration.imports in the web app); larger batches are split. */
 export const MAX_RECORDS = 100;
@@ -46,27 +43,9 @@ export const LOOKUP_MAX = 500;
 const FIELDS = ["number", "native_id", "url", "street", "unit", "city", "state", "zip", "description"];
 
 /**
- * @param {{ env: object, client: object, refresh?: () => Promise<unknown> }} parts
- *   `refresh` runs a heartbeat, for when no pm connection is known yet.
+ * @param {{ client: object }} parts
  */
-export function create_imports({ env, client, refresh = null }) {
-  async function known() {
-    const connections = (await env.local.get(CONNECTIONS_KEY)) || [];
-
-    return connections.find((connection) => connection?.adapter === PM_ADAPTER) || null;
-  }
-
-  async function connection() {
-    let found = await known();
-
-    if (found === null && refresh !== null) {
-      await refresh();
-      found = await known();
-    }
-
-    return found;
-  }
-
+export function create_imports({ client }) {
   const signed_out = () => ({ ok: false, reason: "signed_out", error: "Sign in from the extension's Settings to import work orders." });
 
   /**
@@ -100,12 +79,16 @@ export function create_imports({ env, client, refresh = null }) {
     return { ok: false, reason, error, status: answer.status };
   }
 
-  function no_connection() {
-    return {
-      ok: false,
-      reason: "no_connection",
-      error: "The web app has no AppFolio property-manager connection for this browser to import through.",
-    };
+  /** Which page this is: its host and the company it shows. Without a host there is nothing to import through. */
+  function where(page) {
+    const host = String(page?.host || "").trim().toLowerCase();
+    const company = String(page?.company || "").replace(/\s+/g, " ").trim();
+
+    return host === "" ? null : { host, company };
+  }
+
+  function no_page() {
+    return { ok: false, reason: "unknown_host", error: "This page's address could not be read, so nothing can be imported from it." };
   }
 
   return {
@@ -113,14 +96,16 @@ export function create_imports({ env, client, refresh = null }) {
      * What the web app holds for these numbers: the job each was imported as,
      * or that legacy still has it open. Plus the connection's mode and the test
      * marker, for the page to refuse rows by.
+     *
+     * @param {{host: string, company: string}} page
      */
-    async lookup(numbers) {
+    async lookup(numbers, page) {
       return guarded(async () => {
-        const target = await connection();
-        if (target === null) return no_connection();
+        const target = where(page);
+        if (target === null) return no_page();
 
         const list = [...new Set((numbers || []).map((n) => String(n ?? "").trim()).filter((n) => n !== ""))].slice(0, LOOKUP_MAX);
-        const answer = await client.import_lookup(target.slug, list);
+        const answer = await client.import_lookup(target, list);
         if (!answer.ok) return refused(answer);
 
         return {
@@ -137,11 +122,13 @@ export function create_imports({ env, client, refresh = null }) {
      * Send records, a hundred at a time, and say what became of each, in the
      * order they were given. A batch the server refused whole stops the rest,
      * with the records it did not reach reported as not sent.
+     *
+     * @param {{host: string, company: string}} page
      */
-    async send(records) {
+    async send(records, page) {
       return guarded(async () => {
-        const target = await connection();
-        if (target === null) return no_connection();
+        const target = where(page);
+        if (target === null) return no_page();
 
         const list = (records || []).map(trim_record);
         const results = [];
@@ -149,7 +136,7 @@ export function create_imports({ env, client, refresh = null }) {
 
         for (let start = 0; start < list.length; start += MAX_RECORDS) {
           const batch = list.slice(start, start + MAX_RECORDS);
-          const answer = await client.import_records(target.slug, batch);
+          const answer = await client.import_records(target, batch);
 
           if (!answer.ok) {
             failure = refused(answer);
