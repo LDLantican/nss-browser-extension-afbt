@@ -17,7 +17,7 @@ import { run_suites } from "./harness.js";
 const here = dirname(fileURLToPath(import.meta.url));
 
 /** Need a DOM or Chrome's own APIs, so they run in the extension's test page only. */
-const BROWSER_ONLY = new Set(["adapters/appfolio_vendor_page_test.js", "adapters/chrome_env_test.js", "adapters/fixture_page_test.js"]);
+const BROWSER_ONLY = new Set(["adapters/appfolio_pm_page_test.js", "adapters/appfolio_vendor_page_test.js", "adapters/chrome_env_test.js", "adapters/fixture_page_test.js"]);
 
 function test_files(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

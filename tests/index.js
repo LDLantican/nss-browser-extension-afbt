@@ -6,9 +6,11 @@
 import { run_suites } from "./harness.js";
 
 const FILES = [
+  "adapters/appfolio_pm_page_test.js",
   "adapters/appfolio_vendor_page_test.js",
   "adapters/chrome_env_test.js",
   "adapters/fixture_page_test.js",
+  "worker/appfolio_pm_test.js",
   "worker/appfolio_vendor_test.js",
   "worker/client_test.js",
   "worker/import_test.js",

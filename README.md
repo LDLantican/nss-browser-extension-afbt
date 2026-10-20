@@ -1,8 +1,7 @@
 # NSS Appfolio Helper
 
 A Chrome extension for Alabama Signature Homes' office. It is the browser half
-of the ASH web app, and since 4.0.0 it does exactly two things, both through one
-sign-in:
+of the ASH web app, and it does three things, all through one sign-in:
 
 - **Import.** On the property manager's AppFolio work-order pages, the work
   orders a person ticks are imported into the web app's work-order system.
@@ -10,6 +9,10 @@ sign-in:
   AppFolio's vendor portal — accepts the work order, posts the photographs,
   submits the invoice and presses Work Done — through the `appfolio_vendor`
   adapter. It does this by itself, every minute, while the browser is open.
+- **Inspections** (4.1.0). As the same delivery worker, it puts an inspection
+  ASH approved into the property manager's AppFolio — creates it, fills in its
+  areas and items, attaches the photographs and marks it done — through the
+  `appfolio_pm` adapter, so the office can make work orders from its flags.
 
 Both go through the web app's worker API (`/api/worker/*`, the web app's
 `docs/worker-api.md`) and nothing else.
@@ -128,7 +131,7 @@ brought to a person to press.
 
 **Adapters.** A platform's page knowledge lives in `adapters/<id>/` — a
 manifest, a versioned selector file, the steps, and the page script — and the web
-app can switch a version off without touching the others. Two ship:
+app can switch a version off without touching the others. Three ship:
 - **`appfolio_vendor`** bills AppFolio's vendor portal. It accepts the work order,
   posts the photographs as notes of up to ten, submits the invoice and presses Work
   Done. Each is pressed once, and is looked for before it is pressed. Its page
@@ -137,6 +140,14 @@ app can switch a version off without touching the others. Two ship:
   "The appfolio_vendor adapter". Before it types anything it re-reads the work
   order's description off the vendor page and refuses one that disagrees with the
   connection's mode.
+- **`appfolio_pm`** (4.1.0) puts an approved inspection into the property
+  manager's AppFolio: it searches the inspection list for ASH's number before it
+  creates anything, makes the inspection's areas and items ASH's (adding what was
+  added on site, removing only what is blank), attaches each item's photographs
+  once, and marks it done. Its page script runs on that AppFolio's inspection
+  pages (never the vendor portal); its contract is the web app's
+  `docs/pm-adapter.md`. A list row opens an inspection in a new tab, which the
+  worker reads and closes (`tabs.children`).
 - **`fixture`** bills a pretend portal packaged in the extension. It is only offered
   work by a connection someone made for it on purpose.
 
@@ -148,7 +159,7 @@ on, a background tab in the ASH group opens the portal to look, then closes.
 vendor portal, for work to go out without anybody pressing anything. Any number
 can be — the server hands a job to one worker at a time.
 
-**The web app's `DELIVERY_EXTENSION_VERSION` must say `4.0.0`** once this
+**The web app's `DELIVERY_EXTENSION_VERSION` must say `4.1.0`** once this
 version is loaded, or the worker API answers 426.
 
 ## Settings
@@ -156,9 +167,10 @@ version is loaded, or the worker API answers 426.
 - **Web app** — the address, and whether Chrome has granted permission to call it.
 - **Sign in** — the worker sign-in, and once signed in, who, which device, and
   the worker's number, with **Sign out this device**.
-- **Troubleshooting** — **Check the page** reads the vendor-portal tab you used
-  most recently and lists which of the `appfolio_vendor` adapter's hooks it found
-  (read-only, safe on a real work order). **Stop after the next press** stops
+- **Troubleshooting** — **Check the page** reads the AppFolio tab you used most
+  recently — a vendor-portal work order, or one of the property manager's
+  inspection pages — and lists which of its adapter's hooks it found (read-only,
+  safe on a real page). **Stop after the next press** stops
   this browser dead straight after its next press, as if Chrome had ended it,
   which is how the live kill runs are done; it ships unarmed.
 
@@ -183,6 +195,7 @@ worker/         the delivery worker (/api/worker/*)
   index.js        the alarm, the worker's messages, the wiring
 adapters/       one folder per platform-and-role pair
   appfolio_vendor/  AppFolio's vendor portal: accept, notes, invoice, Work Done
+  appfolio_pm/      the property manager's AppFolio: inspections
   fixture/        a stand-in vendor portal packaged in the extension, for tests
 content/        the property manager's AppFolio pages
   appfolio_scrape.js       shared reader, loaded first in both entries
@@ -209,5 +222,7 @@ the fixture page's DOM and Chrome's real tabs. The kill loop kills the worker
 after every single storage write, request and page command of a job, and after
 random pairs of them, then lets the alarm finish: no run may submit twice. The
 web app's `tests/integration/extension_test.php` runs `tests/e2e.mjs` against the
-real worker API, and `vendor_extension_test.php` runs `tests/e2e_vendor.mjs`:
-whole vendor chains, with real photographs, killed around every press.
+real worker API, `vendor_extension_test.php` runs `tests/e2e_vendor.mjs`:
+whole vendor chains, with real photographs, killed around every press, and
+`pm_extension_test.php` runs `tests/e2e_pm.mjs`: whole inspection chains, the
+same way.

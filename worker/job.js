@@ -514,6 +514,21 @@ function context(rt, job) {
       return job.tab_id === null ? null : rt.env.tabs.url(job.tab_id);
     },
 
+    /** The tabs the page in this job's tab has opened, as `[{ id, url }]` — AppFolio opens an inspection from its list in a new one. */
+    async tab_children() {
+      return job.tab_id === null ? [] : rt.env.tabs.children(job.tab_id);
+    },
+
+    /** The address another tab of this job's shows now. */
+    async url_of(tab_id) {
+      return rt.env.tabs.url(tab_id);
+    },
+
+    /** Close a tab the page opened. Never the job's own. */
+    async close_tab(tab_id) {
+      if (tab_id !== job.tab_id) await rt.env.tabs.close(tab_id);
+    },
+
     /**
      * One photograph of the note this job posts, from the web app, as
      * `{ name, mime_type, b64 }` for the page script to stage. Only the

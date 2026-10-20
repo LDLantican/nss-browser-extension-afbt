@@ -4,6 +4,8 @@
  * be killed after any operation (tests/support/fake_env.js).
  */
 
+import appfolio_pm from "../../adapters/appfolio_pm/adapter.js";
+import { add_unit, create, DEFAULT_LAYOUT, HOST } from "../../adapters/appfolio_pm/site/books.js";
 import appfolio_vendor from "../../adapters/appfolio_vendor/adapter.js";
 import { dispatch } from "../../adapters/appfolio_vendor/site/portal.js";
 import fixture from "../../adapters/fixture/adapter.js";
@@ -29,7 +31,7 @@ export const INVOICE_TOTAL = 10497;
 export const TERMINAL = new Set(["succeeded", "needs_manual", "cancelled"]);
 
 export function registry() {
-  return create_registry([fixture, appfolio_vendor]);
+  return create_registry([fixture, appfolio_vendor, appfolio_pm]);
 }
 
 /** What a test work order's description says (config/work_orders.php, sample_marker). */
@@ -168,4 +170,109 @@ export function seeded(seed) {
 
     return state / 2 ** 32;
   };
+}
+
+// -- The property manager's AppFolio, for inspections (phase 12) -----------------
+
+export const PM_TAG = "INS-000045";
+
+/** What the web app hands every inspection step (App\Services\Integration\InspectionPayload). */
+export const PM_HEADER = {
+  public_id: PM_TAG,
+  name: `415 Boyce · ${PM_TAG} · TEST`,
+  inspected_on: "2026-10-20",
+  street: "415 Boyce",
+  unit: null,
+  city: "Montgomery",
+  state: "AL",
+  zip: "36107",
+  client: "Camelot Properties",
+  is_test: true,
+  test_marker: "TEST",
+};
+
+/**
+ * ASH's areas for the inspection: AppFolio's default as the inspector changed
+ * it on site — a microwave added to the kitchen and its sink flagged, the
+ * second bedroom and the bathroom's shower removed (not there), an exterior
+ * added with its siding flagged. Everything else OK.
+ */
+export function pm_areas() {
+  const areas = DEFAULT_LAYOUT.filter(([name]) => name !== "Bedroom 2").map(([name, items]) => ({
+    name,
+    items: items
+      .filter((item) => !(name === "Bathroom 1" && item === "Shower/Tub"))
+      .map((item, i) => ({ id: i + 1, name: item, result: "ok", note: "" })),
+  }));
+
+  areas[0].items.push({ id: 90, name: "Microwave", result: "ok", note: "" });
+  areas[0].items[1] = { ...areas[0].items[1], result: "follow_up", note: "Drips under the trap" };
+  areas.push({ name: "Exterior", items: [{ id: 91, name: "Siding", result: "follow_up", note: "Needs pressure washing" }] });
+
+  return areas;
+}
+
+/**
+ * A world with the property manager's AppFolio: a unit at 415 Boyce, a fake web
+ * app whose connection runs the appfolio_pm adapter, a browser signed in to
+ * both, and one delivery of `operation` for INS-000045 waiting. Every step but
+ * create finds the inspection already in AppFolio, linked.
+ */
+export async function pm_world({ operation = "create", connection = {}, photos = 3, payload = {} } = {}) {
+  const world = create_world();
+
+  world.server = create_fake_server(world, { version: world.version });
+  Object.assign(
+    world.server.connection,
+    { slug: "appfolio-camelot-pm-test", name: "Camelot AppFolio (test)", role: "pm", adapter: "appfolio_pm", external_host: HOST },
+    connection,
+  );
+
+  add_unit(world.pm, { name: "Boyce 415", street: "415 Boyce" });
+
+  const { env } = create_life(world);
+  const signed = await create_runtime(env, registry()).sign_in({
+    email: world.server.person.email,
+    password: world.server.person.password,
+    device_name: "Test",
+  });
+
+  if (!signed.ok) throw new Error(`sign-in failed: ${signed.status}`);
+
+  const inspection =
+    operation === "create" ? null : create(world.pm, { name: PM_HEADER.name, date: PM_HEADER.inspected_on, unit_label: world.pm.units[0].label });
+
+  /* create() counted that; the books count only what the adapter does from here. */
+  world.pm.creates = 0;
+
+  const shots = Array.from({ length: photos }, (_, i) => ({ id: 201 + i, name: `IMG_${i + 1}.jpg`, mime_type: "image/jpeg", byte_size: 6 }));
+  const by_operation = {
+    create: { inspection: PM_HEADER },
+    fill_areas: { inspection: PM_HEADER, areas: pm_areas() },
+    post_photos: {
+      inspection: PM_HEADER,
+      item: { id: 2, area: "Kitchen", area_nth: 0, name: "Sink", item_nth: 0 },
+      part: 1,
+      parts: 1,
+      photos_before: 0,
+      photos_after: photos,
+      photos: shots,
+    },
+    mark_done: { inspection: PM_HEADER },
+  };
+
+  const delivery = world.server.enqueue({
+    entity_type: "inspection",
+    operation,
+    public_id: PM_TAG,
+    payload: { ...by_operation[operation], ...payload },
+    link: inspection
+      ? { id: 7, namespace: "", external_id: inspection.id, number: null, url: `https://${HOST}/inspections/${inspection.id}`, status: "linked" }
+      : null,
+  });
+
+  /* A create has no link yet: the fake answers that as the web app does. */
+  if (!inspection) delivery.link = null;
+
+  return { world, delivery, inspection };
 }

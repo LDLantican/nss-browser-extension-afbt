@@ -13,6 +13,11 @@
 > vendor portal. On updating, it deletes what earlier versions stored, except the
 > web app's address.
 
+> **What changed in version 4.1.** The extension can also put an inspection
+> Alabama Signature Homes approved into the property manager's AppFolio — the
+> inspection's name, date, property, areas, items, notes and photographs — on
+> the web app's behalf, in a background tab, as a person would.
+
 ---
 
 ## 1. Overview
@@ -25,6 +30,9 @@ Homes. It does two things:
 2. **Bills approved work** in **AppFolio's vendor portal**, on the web app's
    behalf: it accepts the work order, posts its photographs as notes, submits the
    invoice and marks the work done, in a background tab, as a person would.
+3. **Puts approved inspections into AppFolio**, as the property manager, on the
+   web app's behalf: it creates the inspection, fills in its areas and items,
+   attaches its photographs and marks it done, in a background tab.
 
 There is no third-party service involved in either. Data goes between AppFolio
 and Alabama Signature Homes' own web app, and nowhere else.
@@ -56,6 +64,13 @@ The information the extension reads and sends is:
   hands this browser work it can do.
 - **What happened on each vendor-portal step** — whether a step succeeded, and
   the invoice or note it produced — reported back to the web app.
+- **Approved inspections from the web app** — the inspection's name, date and
+  property, its areas and items with their answers and notes, and its
+  photographs — typed into or uploaded to the property manager's AppFolio, and
+  nowhere else; and AppFolio's id and address for the inspection it created,
+  reported back to the web app.
+- **Whether this browser is signed in to the property manager's AppFolio**,
+  reported to the web app, as for the vendor portal.
 
 ---
 

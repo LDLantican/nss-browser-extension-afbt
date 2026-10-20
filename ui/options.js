@@ -432,7 +432,7 @@ function describe_probe(report) {
 
   return [
     `Page: ${report.tab_title || "(untitled)"}`,
-    `appfolio_vendor adapter, ${adapter.kind || "unknown"} page, ${adapter.signed_in ? "signed in" : "signed out"}${adapter.loading ? ", still loading" : ""}`,
+    `${report.adapter_id || "appfolio_vendor"} adapter, ${adapter.kind || "unknown"} page, ${adapter.signed_in ? "signed in" : "signed out"}${adapter.loading ? ", still loading" : ""}`,
     `  found:   ${(adapter.found || []).join(", ") || "nothing"}`,
     `  missing: ${(adapter.missing || []).join(", ") || "nothing"}`,
   ].join(NEWLINE);

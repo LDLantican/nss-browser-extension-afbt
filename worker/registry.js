@@ -30,11 +30,15 @@
  * what each may return.
  */
 
+import appfolio_pm from "../adapters/appfolio_pm/adapter.js";
 import appfolio_vendor from "../adapters/appfolio_vendor/adapter.js";
 import fixture from "../adapters/fixture/adapter.js";
 
-/** What this build ships: the vendor portal (phase 9), and the stand-in that proves the runtime. */
-export const ADAPTERS = [appfolio_vendor, fixture];
+/**
+ * What this build ships: the vendor portal (phase 9), the property manager's
+ * inspections (phase 12), and the stand-in that proves the runtime.
+ */
+export const ADAPTERS = [appfolio_vendor, appfolio_pm, fixture];
 
 export function create_registry(adapters = ADAPTERS) {
   const by_id = new Map(adapters.map((adapter) => [adapter.id, adapter]));

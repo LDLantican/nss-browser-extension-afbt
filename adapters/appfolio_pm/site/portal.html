@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inspections (fixture)</title>
+    <link rel="stylesheet" href="../../appfolio_vendor/site/portal.css" />
+  </head>
+  <body>
+    <!--
+      A pretend AppFolio, property-manager side, packaged with the extension so
+      the appfolio_pm page script can be tested where there is a DOM, and create
+      nothing anywhere real. site.js renders the inspection list, the New
+      Inspection form and an inspection from the books in books.js, with the
+      markup and `js-*` hooks read off Camelot's AppFolio on 2026-10-20
+      (structure only). The route is the hash, because an extension page cannot
+      have AppFolio's paths. ../selectors.v1.js and ../page.js are the adapter's
+      page script, exactly as the manifest injects them.
+    -->
+    <main id="main"></main>
+
+    <script type="module" src="site.js"></script>
+    <script src="../selectors.v1.js"></script>
+    <script src="../page.js"></script>
+  </body>
+</html>

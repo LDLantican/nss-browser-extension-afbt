@@ -37,6 +37,19 @@ const LEGACY_ALARMS = ["nss-delivery-drain", "nss-sync-retry"];
  * Tabs the worker opened are skipped: they belong to a job, and a check that
  * read one mid-job would describe a page nobody chose.
  */
+/**
+ * Which adapter's page script answers on this tab: the vendor portal's, or the
+ * property manager's inspection pages' (phase 12). Null for anything else.
+ */
+function adapter_for(tab) {
+  const url = String(tab?.url || "");
+
+  if (url.startsWith("https://vendor.appfolio.com/")) return "appfolio_vendor";
+  if (/^https:\/\/[a-z0-9-]+\.appfolio\.com\/(inspections\/|maintenance\/inspections)/i.test(url)) return "appfolio_pm";
+
+  return null;
+}
+
 async function probe_target() {
   let owned = [];
 
@@ -47,15 +60,17 @@ async function probe_target() {
   }
 
   const skip = new Set(Array.isArray(owned) ? owned : []);
-  const is_vendor = (tab) => String(tab?.url || "").startsWith("https://vendor.appfolio.com");
+  const is_target = (tab) => adapter_for(tab) !== null;
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  if (is_vendor(active) && !skip.has(active.id)) return active;
+  if (is_target(active) && !skip.has(active.id)) return active;
 
-  const tabs = await chrome.tabs.query({ url: "https://vendor.appfolio.com/*" });
+  const tabs = await chrome.tabs.query({
+    url: ["https://vendor.appfolio.com/*", "https://*.appfolio.com/inspections/*", "https://*.appfolio.com/maintenance/inspections*"],
+  });
 
   return tabs
-    .filter((tab) => !skip.has(tab.id))
+    .filter((tab) => is_target(tab) && !skip.has(tab.id))
     .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0] || null;
 }
 
@@ -70,9 +85,11 @@ const handlers = {
   },
 
   /**
-   * Ask the vendor page a person has open what the adapter would find on it.
+   * Ask the AppFolio page a person has open what the adapter would find on it:
+   * a vendor-portal page, or one of the property manager's inspection pages.
    *
-   * The adapter's own page script (adapters/appfolio_vendor/page.js) reads the
+   * The adapter's own page script (adapters/appfolio_vendor/page.js, or
+   * adapters/appfolio_pm/page.js) reads the
    * page with the hooks in selectors.v1.js and answers which it found: step 0
    * of the rollout ladder. It clicks nothing and types nothing, so it is safe
    * on a live client's work order — which matters, because there is no
@@ -85,7 +102,7 @@ const handlers = {
     if (!tab?.id)
       return {
         ok: false,
-        error: "Open an AppFolio vendor work order in another tab first, then check again.",
+        error: "Open an AppFolio vendor work order, or one of the property manager's inspection pages, in another tab first, then check again.",
       };
 
     const answer = await chrome.tabs
@@ -98,7 +115,7 @@ const handlers = {
         error: "That page did not answer. Reload it and try again.",
       };
 
-    return { ok: true, report: { tab_title: tab.title || tab.url || "", adapter: answer.result } };
+    return { ok: true, report: { tab_title: tab.title || tab.url || "", adapter_id: adapter_for(tab), adapter: answer.result } };
   },
 
   /**

@@ -27,12 +27,14 @@
 
 import { empty_site } from "../../adapters/fixture/site/ledger.js";
 import { empty_portal } from "../../adapters/appfolio_vendor/site/portal.js";
+import { empty_books } from "../../adapters/appfolio_pm/site/books.js";
 import { fake_page_command } from "./fake_page.js";
 import { fake_vendor_command, vendor_landing, VENDOR_ORIGIN } from "./fake_vendor.js";
+import { fake_pm_command, is_pm_url, pm_landing } from "./fake_pm.js";
 import { TabGone } from "../../worker/errors.js";
 
-/** A freshly loaded page: every form empty. */
-const blank_tab = (url) => ({ url, form: [], staged: [], attached: 0, note: "" });
+/** A freshly loaded page: every form empty. `opener` is the tab whose page opened it, if one did. */
+const blank_tab = (url, opener = null) => ({ url, opener, form: [], staged: [], attached: 0, note: "" });
 
 const clone = (value) => (value === undefined || value === null ? null : structuredClone(value));
 
@@ -49,6 +51,8 @@ export function create_world({ base = "https://ash.example.test", version = "tes
     clock: { ms: Date.UTC(2026, 9, 15, 12, 0, 0) },
     site: empty_site(),
     vendor: empty_portal(),
+    /* The property manager's AppFolio, for inspections (phase 12). */
+    pm: empty_books(),
     lives: 0,
 
     close_browser() {
@@ -76,6 +80,9 @@ export function create_life(world, { kill_after = null } = {}) {
   };
 
   const never = () => new Promise(() => {});
+
+  /** Where a tab sent to `url` lands, signed out of either AppFolio or not. */
+  const land = (url) => (is_pm_url(url) ? pm_landing(world.pm, url) : vendor_landing(world.vendor, url));
 
   /** Wrap one effect so it counts, and so a dead life never comes back from it. */
   const op = (name, effect) => async (...args) => {
@@ -142,14 +149,14 @@ export function create_life(world, { kill_after = null } = {}) {
       open: op("tabs.open", async (url) => {
         const id = world.next_tab++;
 
-        world.tabs.set(id, blank_tab(vendor_landing(world.vendor, url)));
+        world.tabs.set(id, blank_tab(land(url)));
 
         return id;
       }),
       navigate: op("tabs.navigate", async (id, url) => {
         if (!world.tabs.has(id)) return false;
 
-        world.tabs.set(id, blank_tab(vendor_landing(world.vendor, url)));
+        world.tabs.set(id, blank_tab(land(url), world.tabs.get(id).opener));
 
         return true;
       }),
@@ -159,6 +166,9 @@ export function create_life(world, { kill_after = null } = {}) {
         world.tabs.delete(id);
       }),
       reveal: op("tabs.reveal", async () => {}),
+      children: op("tabs.children", async (id) =>
+        [...world.tabs.entries()].filter(([, tab]) => tab.opener === id).map(([child, tab]) => ({ id: child, url: tab.url })),
+      ),
       close_strays: op("tabs.close_strays", async (keep) => {
         for (const id of [...world.tabs.keys()]) if (id !== keep) world.tabs.delete(id);
       }),
@@ -170,6 +180,7 @@ export function create_life(world, { kill_after = null } = {}) {
 
         if (!tab) throw new TabGone();
 
+        if (is_pm_url(tab.url)) return fake_pm_command(world, tab_id, tab, command, args);
         if (!tab.url.startsWith("chrome-extension:")) return fake_vendor_command(world.vendor, tab, command, args);
 
         return fake_page_command(world.site, tab, command, args);

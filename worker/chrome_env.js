@@ -165,6 +165,21 @@ export function create_chrome_env() {
         await chrome.tabs.remove(tab_id).catch(() => null);
       },
 
+      /**
+       * The tabs a page in `tab_id` opened — AppFolio opens an inspection from
+       * its list in a new one (appfolio_pm). Each is remembered as this
+       * worker's, so one left open by a worker that died is closed by the
+       * next tick's close_strays.
+       */
+      async children(tab_id) {
+        const tabs = await chrome.tabs.query({}).catch(() => []);
+        const opened = tabs.filter((tab) => tab.openerTabId === tab_id);
+
+        for (const tab of opened) await remember_tab(tab.id);
+
+        return opened.map((tab) => ({ id: tab.id, url: tab.pendingUrl || tab.url || null }));
+      },
+
       /** Hand the tab to a person: out of the collapsed group, in front, and said so. */
       async reveal(tab_id, message) {
         try {

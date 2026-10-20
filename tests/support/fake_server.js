@@ -16,6 +16,10 @@ const FLAGS = {
   post_photos: { idempotent: false, verifiable: true, negative_verify_trusted: true },
   submit_invoice: { idempotent: false, verifiable: true, negative_verify_trusted: false },
   mark_work_done: { idempotent: true, verifiable: true, negative_verify_trusted: true },
+  /* An inspection on the property manager's side (phase 12). post_photos has the same flags there. */
+  create: { idempotent: false, verifiable: true, negative_verify_trusted: true },
+  fill_areas: { idempotent: true, verifiable: true, negative_verify_trusted: true },
+  mark_done: { idempotent: true, verifiable: true, negative_verify_trusted: true },
 };
 
 /** A photograph's bytes, made up from its id, so a test can see which one went where. */
@@ -46,6 +50,8 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
       auto_submit: true,
       on_over_limit: "block",
       cap: 2,
+      /* Where a property-manager connection's pages are (phase 12); a vendor connection has none. */
+      external_host: null,
     },
     /**
      * The property manager's AppFolio, for the import (phase 8). It is listed
@@ -66,6 +72,10 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
       /* The page's host is the key and the company it names the check (phase 10). */
       host: "camelotproperties.appfolio.com",
       company: "Camelot Properties, LLC",
+      /* Whether this browser's person operates it. Off by default, as for most
+         people: the heartbeat then says so, and the appfolio_pm adapter opens
+         no probe tab for a connection nobody here can work (phase 12). */
+      operator: false,
     },
     marker: "This is a test work order approved by Dustin.",
     /** number => the job an import made. */
@@ -81,10 +91,13 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
     now: () => world.clock.ms,
 
     /** A waiting delivery, as Approve would queue it. */
-    enqueue({ operation = "submit_invoice", public_id = "WO-000001", payload = null, expected_total_cents = null, depends_on = null, part = 1, link = null } = {}) {
+    enqueue({
+      operation = "submit_invoice", public_id = "WO-000001", payload = null, expected_total_cents = null, depends_on = null, part = 1, link = null,
+      entity_type = "work_order",
+    } = {}) {
       const delivery = {
         id: server.next_delivery++,
-        entity: { type: "work_order", id: server.next_delivery, public_id, version: 1 },
+        entity: { type: entity_type, id: server.next_delivery, public_id, version: 1 },
         operation,
         status: "pending",
         attempt_count: 0,
@@ -295,7 +308,7 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
           entity: { ...d.entity },
           connection: {
             id: c.id, slug: c.slug, platform: c.platform, role: c.role, adapter: c.adapter, scope: c.scope,
-            dry_run: c.dry_run, auto_submit: c.auto_submit, on_over_limit: c.on_over_limit,
+            dry_run: c.dry_run, auto_submit: c.auto_submit, on_over_limit: c.on_over_limit, external_host: c.external_host ?? null,
           },
           link: d.link || { id: d.id, namespace: "", external_id: null, number: d.entity.public_id, url: null, status: "pending" },
           payload: verify ? d.snapshot : d.payload,
@@ -442,11 +455,14 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
             {
               id: c.id, slug: c.slug, name: c.name, adapter: c.adapter, enabled: c.enabled, paused: c.paused,
               scope: c.scope, dry_run: c.dry_run, auto_submit: c.auto_submit, claimable: reason === null, reason,
+              external_host: c.external_host ?? null,
             },
             {
               id: server.pm.id, slug: server.pm.slug, name: server.pm.name, adapter: server.pm.adapter,
               enabled: server.pm.enabled, paused: server.pm.paused, scope: server.pm.scope,
-              dry_run: true, auto_submit: false, claimable: false, reason: "adapter_not_reported",
+              dry_run: true, auto_submit: false, claimable: false,
+              reason: server.pm.operator ? "session_not_live" : "not_operator",
+              external_host: server.pm.host,
             },
           ],
         },

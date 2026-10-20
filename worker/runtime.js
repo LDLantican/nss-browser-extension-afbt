@@ -113,7 +113,10 @@ export function create_runtime(env, registry, options = {}) {
 
     await env.local.set(
       CONNECTIONS_KEY,
-      (answer.body?.connections || []).map(({ slug, adapter, enabled, reason }) => ({ slug, adapter, enabled, reason: reason ?? null })),
+      /* external_host: where a property-manager connection's pages are (appfolio_pm). */
+      (answer.body?.connections || []).map(({ slug, adapter, enabled, reason, external_host }) => ({
+        slug, adapter, enabled, reason: reason ?? null, external_host: external_host ?? null,
+      })),
     );
 
     if (fresh.length > 0) answer = await send(answer.body.connections);
