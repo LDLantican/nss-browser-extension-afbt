@@ -368,7 +368,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (event.target.closest(".select2-choice")) {
         app.form.open = true;
 
-        return app.render();
+        return app.render_keeping_typed();
       }
 
       const option = event.target.closest(".Select-option");
@@ -393,15 +393,7 @@ document.addEventListener("DOMContentLoaded", () => {
       app.form.chosen = search_units(books, app.form.query)[Number(result.dataset.unit)] || null;
       app.form.open = false;
 
-      /* Keep the name and date typed before the search. */
-      const name = app.main.querySelector("[name='new_inspection[inspection][name]']").value;
-      const date = app.main.querySelector("[name='new_inspection[inspection][inspected_on]']").value;
-
-      await app.render();
-      app.main.querySelector("[name='new_inspection[inspection][name]']").value = name;
-      app.main.querySelector("[name='new_inspection[inspection][inspected_on]']").value = date;
-
-      return undefined;
+      return app.render_keeping_typed();
     },
 
     on_input(event) {
@@ -414,15 +406,26 @@ document.addEventListener("DOMContentLoaded", () => {
     on_keyup(event) {
       if (event.target.matches(".select2-input")) {
         app.form.query = event.target.value;
-
-        const name = app.main.querySelector("[name='new_inspection[inspection][name]']").value;
-        const date = app.main.querySelector("[name='new_inspection[inspection][inspected_on]']").value;
-
-        app.render().then(() => {
-          app.main.querySelector("[name='new_inspection[inspection][name]']").value = name;
-          app.main.querySelector("[name='new_inspection[inspection][inspected_on]']").value = date;
-        });
+        app.render_keeping_typed();
       }
+    },
+
+    /*
+     * The pretend form is redrawn whole when the address search opens, is
+     * typed in or is chosen from; AppFolio's select2 touches no other field,
+     * so the name and date typed before it are put back.
+     */
+    async render_keeping_typed() {
+      const field = (name) => app.main.querySelector(`[name='new_inspection[inspection][${name}]']`);
+      const name = field("name")?.value ?? "";
+      const date = field("inspected_on")?.value ?? "";
+
+      await app.render();
+
+      if (field("name")) field("name").value = name;
+      if (field("inspected_on")) field("inspected_on").value = date;
+
+      return undefined;
     },
 
     async keep_area(input) {
