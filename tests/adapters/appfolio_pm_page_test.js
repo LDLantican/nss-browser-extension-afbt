@@ -290,6 +290,14 @@ export default {
 
       t.deep(await p.ask("attach_photos", where), { attached: 2 });
 
+      /* Attached is not saved: the open form shows them as thumbnails, and a
+         hand-over once took that for a Save nobody pressed (2026-10-22). */
+      await settle();
+
+      const open = (await p.ask("sheet")).areas[0].items.find((i) => i.name === "Sink");
+
+      t.equal(open.photos, null, `an open form's previews were counted as ${open.photos} saved photographs`);
+
       await p.ask("save_item", where);
       await settle();
 

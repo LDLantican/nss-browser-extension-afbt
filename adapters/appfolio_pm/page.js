@@ -436,7 +436,11 @@
            gives, so the fill sees it as a difference and puts it right. */
         result: chosen(S.flag) && chosen(S.ok) ? "both" : chosen(S.flag) ? "follow_up" : chosen(S.ok) ? "ok" : null,
         note: li.querySelector(S.description)?.textContent.trim() || "",
-        photos: li.querySelectorAll(S.photo_thumb).length,
+        /* An open form shows the photographs attached to it as the same
+           thumbnails, before anything is saved (read live, 2026-10-22), so
+           while it is open the item's count is not known. Counting them is
+           how a hand-over once read an unsaved form as "Saved by hand". */
+        photos: input || li.querySelector(S.notes) ? null : li.querySelectorAll(S.photo_thumb).length,
       };
     },
 

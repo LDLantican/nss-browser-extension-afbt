@@ -208,6 +208,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         return `<li class="js-item p-4 list-group-item" id="${item.id}"><div class="js-item-header ps-0 d-flex align-items-center col" role="button"><div class="js-item-name me-auto"><label class="col-form-label">Name*</label><input class="js-item-name-input form-control" value="${app.escape(editing.name)}"></div>${buttons}</div>
           <div class="js-item-content mt-3 ps-0 col"><textarea class="js-item-notes form-control mb-1">${app.escape(editing.note)}</textarea>
+            <div class="my-4">${Array.from({ length: editing.files }, () => `<button class="me-3 my-1 rounded btn btn-outline-light"></button>`).join("")}</div>
             <button type="button" class="js-no-autofocus btn btn-secondary">Choose Photos to Add</button><input type="file" accept="image/*" multiple>
             <button type="button" class="js-item-save me-2 btn btn-primary" data-action="save" data-item="${item.id}">Save</button>
             <button type="button" class="js-item-cancel btn btn-secondary" data-action="cancel">Cancel</button>
@@ -467,8 +468,14 @@ document.addEventListener("DOMContentLoaded", () => {
       if (event.target.matches(".js-area-name-input")) app.keep_area(event.target);
     },
 
+    /* As AppFolio does, the form shows what was attached at once, as the
+       same thumbnails a saved photograph gets, before anything is saved. */
     on_change(event) {
-      if (event.target.matches(".js-item-content input[type='file']") && app.editing) app.editing.files = event.target.files.length;
+      if (!event.target.matches(".js-item-content input[type='file']") || !app.editing) return;
+
+      app.editing.files = event.target.files.length;
+      app.capture_fields();
+      app.render();
     },
   };
 

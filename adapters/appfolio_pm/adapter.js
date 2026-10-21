@@ -502,21 +502,30 @@ function part_of(ctx) {
   };
 }
 
-/** How many photographs the item shows now, or null if it is not there. */
+/*
+ * The item's form is open, so its count cannot be read: the form shows what is
+ * attached to it as the same thumbnails, saved or not. Never "done".
+ */
+const FORM_OPEN = "form_open";
+
+/** How many photographs the item shows now, FORM_OPEN, or null if it is not there. */
 async function photo_count(ctx) {
   const { where } = part_of(ctx);
   const page = await sheet(ctx);
   const area = page.areas.filter((a) => a.name === where.area)[where.area_nth];
   const item = area?.items.filter((i) => i.name === where.item)[where.item_nth];
 
-  return item ? Number(item.photos || 0) : null;
+  if (!item) return null;
+
+  return item.photos === null ? FORM_OPEN : Number(item.photos || 0);
 }
 
-/** Done, still to do, or a count nobody can account for — which is a person's. */
+/** Done, still to do, the form still open, or a count nobody can account for — which is a person's. */
 function judge_count(ctx, count) {
   const { where, before, after } = part_of(ctx);
 
   if (count === null) throw new AdapterError(PERMANENT, `AppFolio has no item ${where.area}: ${where.item}.`);
+  if (count === FORM_OPEN) return FORM_OPEN;
   if (count === after) return "done";
   if (count === before) return "to_do";
 
@@ -675,7 +684,13 @@ const VERIFY = {
     {
       name: "look",
       async run(ctx) {
-        return judge_count(ctx, await photo_count(ctx)) === "done"
+        const seen = judge_count(ctx, await photo_count(ctx));
+
+        /* Absent is trusted and sends the photographs again, so it is never
+           said of a count that could not be read. */
+        if (seen === FORM_OPEN) throw new AdapterError(UNKNOWN_OUTCOME, "The item's form is open, so its photographs cannot be counted.");
+
+        return seen === "done"
           ? { verdict: "found", identity: identity_of(ctx), evidence: "The photographs are on the item." }
           : { verdict: "absent", evidence: "The item shows the photographs it had before." };
       },
