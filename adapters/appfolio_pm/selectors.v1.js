@@ -47,6 +47,12 @@
     address_choice: ".select2-choice, a.select2-choice",
     address_search: ".select2-drop-active .select2-input, .select2-search .select2-input",
     address_result: ".select2-results li.select2-result-selectable",
+    /* The results select2's highlight() counts, in its order (select2 3's
+       findHighlightableChoices), and the input it is bound to, which holds the
+       chosen place's id once one is picked. */
+    address_pickable: ".select2-drop-active .select2-results li.select2-result-selectable:not(.select2-disabled):not(.select2-selected)",
+    address_value: "input.js-inspectable-id",
+    address_chosen: ".select2-chosen",
     address_kind_unit: ".sprite-unit",
     address_kind_property: ".sprite-property",
     layout_default: "input.js-layout-button[value='default']",

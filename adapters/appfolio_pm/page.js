@@ -34,6 +34,7 @@
   const RESULT_MS = 10000;
   const SAVE_MS = 20000;
   const DIALOG_MS = 4000;
+  const BRIDGE_MS = 1500;
 
   const fixture = location.protocol === "chrome-extension:";
   const frame = fixture ? new URLSearchParams(location.search).get("frame") : null;
@@ -295,19 +296,33 @@
       };
     },
 
+    /*
+     * The address box is select2 3, which searches only while its search box
+     * has focus — and this is a background tab, where it never does. So the
+     * search and the pick go through select2's own API, by way of
+     * select2_bridge.js in the page's world; typing is the fallback, for a
+     * page where the bridge finds no select2 to drive. Which result is taken
+     * is decided here either way.
+     */
     async choose_address(street, unit) {
       const container = document.querySelector(S.address_container);
       const opener = container?.querySelector(S.address_choice) || container;
 
       if (!opener) throw refuse("The form has no address search.");
 
-      /* select2 opens on mousedown. */
-      opener.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      const bridged = await app.select2("search", { term: street });
 
-      const search = await app.until(() => document.querySelector(S.address_search), "The address search did not open.", RESULT_MS);
+      if (!bridged.ok && bridged.reason !== "unavailable") throw refuse(`The address search failed: ${bridged.reason}`, "transient");
 
-      app.type(search, street);
-      search.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "e" }));
+      if (!bridged.ok) {
+        /* select2 opens on mousedown. */
+        opener.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+
+        const search = await app.until(() => document.querySelector(S.address_search), "The address search did not open.", RESULT_MS);
+
+        app.type(search, street);
+        search.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "e" }));
+      }
 
       const wanted = street.trim().toLowerCase();
       const fits = (li) => {
@@ -327,11 +342,63 @@
 
       const label = pick.textContent.trim();
 
-      pick.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-      pick.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-      pick.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      if (bridged.ok) {
+        pick.setAttribute("data-ash-pick", "");
+
+        const picked = await app.select2("pick", { results: S.address_pickable });
+
+        if (!picked.ok) throw refuse(`The address could not be chosen: ${picked.reason}`, "transient");
+      } else {
+        pick.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+        pick.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        pick.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      }
+
+      /* Taken: the box shows the start of the row picked ("Boyce 415"), and
+         the bound input holds its id. Otherwise Start would make an
+         inspection with no address. */
+      const taken = () => {
+        const chosen = document.querySelector(S.address_container)?.querySelector(S.address_chosen)?.textContent.trim() || "";
+        const value = document.querySelector(S.address_value)?.value || "";
+
+        return chosen !== "" && label.startsWith(chosen) && value !== "" ? true : null;
+      };
+
+      await app.until(taken, "AppFolio did not take the address.", RESULT_MS).catch(() => {
+        throw refuse("AppFolio did not take the address.", "transient");
+      });
 
       return label;
+    },
+
+    /** Ask select2_bridge.js, in the page's world, to drive select2. No answer is "unavailable". */
+    select2(op, args = {}) {
+      const id = crypto.randomUUID();
+
+      return new Promise((resolve) => {
+        const done = (event) => {
+          let reply;
+
+          try {
+            reply = JSON.parse(String(event.detail));
+          } catch {
+            return;
+          }
+
+          if (reply?.id !== id) return;
+
+          clearTimeout(timer);
+          document.removeEventListener("ash:select2:done", done);
+          resolve(reply);
+        };
+        const timer = setTimeout(() => {
+          document.removeEventListener("ash:select2:done", done);
+          resolve({ ok: false, reason: "unavailable" });
+        }, BRIDGE_MS);
+
+        document.addEventListener("ash:select2:done", done);
+        document.dispatchEvent(new CustomEvent("ash:select2", { detail: JSON.stringify({ id, op, input: S.address_value, ...args }) }));
+      });
     },
 
     // -- An inspection ----------------------------------------------------------

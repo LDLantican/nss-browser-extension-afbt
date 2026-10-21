@@ -163,7 +163,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="js-date"><label>Inspection Date</label><input type="date" class="js-datepicker" name="new_inspection[inspection][inspected_on]"></div>
           <div class="js-inspectable"><label>Address</label>
             <div class="select2-container js-select2-search-inspectable"><a class="select2-choice"><span class="select2-chosen">${app.escape(app.form.chosen?.label || "Search for property, unit or tenant")}</span></a></div>
-            <input type="hidden" name="new_inspection[new_inspectable_id]" value="${app.form.chosen ? "1" : ""}">
+            <input type="hidden" class="js-inspectable-id" name="new_inspection[new_inspectable_id]" value="${app.form.chosen ? "1" : ""}">
             ${app.form.open ? `<div class="select2-drop select2-drop-active"><div class="select2-search"><input type="text" class="select2-input" value="${app.escape(app.form.query)}"></div><ul class="select2-results">${results}</ul></div>` : ""}
           </div>
           <label><input type="radio" class="js-layout-button" name="new_inspection[layout]" value="default" checked> Use default layout as starting point.</label>
@@ -403,8 +403,15 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     },
 
+    /*
+     * Only a real keystroke searches. AppFolio's select2 searches only while
+     * its box has focus, and the worker's background tab never gives it any,
+     * so a script's key events find nothing there (the dry run of 2026-10-22).
+     * Ignoring untrusted ones is the same failure, made certain: page.js has
+     * to come through select2's own API, below.
+     */
     on_keyup(event) {
-      if (event.target.matches(".select2-input")) {
+      if (event.target.matches(".select2-input") && event.isTrusted) {
         app.form.query = event.target.value;
         app.render_keeping_typed();
       }
@@ -450,6 +457,44 @@ document.addEventListener("DOMContentLoaded", () => {
       if (event.target.matches(".js-item-content input[type='file']") && app.editing) app.editing.files = event.target.files.length;
     },
   };
+
+  /*
+   * The slice of select2 3's API that select2_bridge.js drives, on the bound
+   * input, reached the way AppFolio's page reaches it: jQuery(input).data(
+   * "select2"). The highlight index counts the selectable results in order,
+   * which here is the search's own order.
+   */
+  const select2 = {
+    highlighted: -1,
+    opened: () => app.form.open,
+    open() {
+      app.form.open = true;
+      app.render_keeping_typed();
+    },
+    search: {
+      val(value) {
+        if (value === undefined) return app.form.query;
+        app.form.query = String(value);
+
+        return undefined;
+      },
+    },
+    updateResults() {
+      app.render_keeping_typed();
+    },
+    highlight(index) {
+      select2.highlighted = Number(index);
+    },
+    async selectHighlighted() {
+      const books = await app.load();
+
+      app.form.chosen = search_units(books, app.form.query)[select2.highlighted] || null;
+      app.form.open = false;
+      app.render_keeping_typed();
+    },
+  };
+
+  window.jQuery = (element) => ({ data: (key) => (key === "select2" && element?.matches?.(".js-inspectable-id") ? select2 : undefined) });
 
   window.addEventListener("load", () => {
     app.init();

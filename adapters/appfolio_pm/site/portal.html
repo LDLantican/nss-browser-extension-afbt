@@ -15,12 +15,15 @@
       markup and `js-*` hooks read off Camelot's AppFolio on 2026-10-20
       (structure only). The route is the hash, because an extension page cannot
       have AppFolio's paths. ../selectors.v1.js and ../page.js are the adapter's
-      page script, exactly as the manifest injects them.
+      page script, exactly as the manifest injects them, and ../select2_bridge.js
+      the part it injects into the page's own world (on an extension page there
+      is only the one).
     -->
     <main id="main"></main>
 
     <script type="module" src="site.js"></script>
     <script src="../selectors.v1.js"></script>
     <script src="../page.js"></script>
+    <script src="../select2_bridge.js"></script>
   </body>
 </html>

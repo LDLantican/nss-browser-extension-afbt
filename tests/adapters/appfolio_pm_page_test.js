@@ -75,7 +75,7 @@ async function site_for({ signed_in = true, inspections = 0 } = {}) {
     await chrome.storage.local.remove(store);
   };
 
-  return { store, made, go, ask, read, done };
+  return { store, made, go, ask, read, done, doc: () => iframe.contentDocument };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
@@ -110,6 +110,40 @@ export default {
       t.ok(String(opened[0]?.url || opened[0]?.pendingUrl).includes(`#/inspections/${p.made[0].id}`), "the tab is not the inspection");
 
       for (const tab of opened) await chrome.tabs.remove(tab.id);
+    } finally {
+      await p.done();
+    }
+  },
+
+  async "the address box is driven through select2's own API, because a background tab's typing finds nothing"(t) {
+    const p = await site_for();
+
+    try {
+      await p.go("/maintenance/inspections/new");
+
+      /* What the dry run of 2026-10-22 met: a script's typing searches nothing. */
+      const doc = p.doc();
+
+      doc.querySelector(".js-select2-search-inspectable .select2-choice").dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      await settle();
+
+      const search = doc.querySelector(".select2-drop-active .select2-input");
+
+      search.value = "415 Boyce";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      search.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "e" }));
+      await settle();
+
+      t.equal(doc.querySelectorAll(".select2-results li.select2-result-selectable").length, 0, "typed text was searched");
+
+      await p.go("/maintenance/inspections/new?again");
+
+      const filled = await p.ask("fill_new", { name: PM_HEADER.name, date: PM_HEADER.inspected_on, street: "415 Boyce", unit: null });
+      const after = p.doc();
+
+      t.ok(filled.address.startsWith("Boyce 415"), `chose ${filled.address}`);
+      t.equal(after.querySelector("input.js-inspectable-id").value !== "", true, "the bound input holds no place");
+      t.ok(after.querySelector(".select2-chosen").textContent.startsWith("Boyce 415"), "the box does not show the unit");
     } finally {
       await p.done();
     }
