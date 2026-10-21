@@ -515,6 +515,15 @@ document.addEventListener("DOMContentLoaded", () => {
     },
   };
 
+  /*
+   * Chrome's popup blocker, as the worker's background tab meets it: a
+   * window.open with no person's click behind it opens nothing (2026-10-22).
+   * page_bridge.js's row_url intercepts the call before it gets here.
+   */
+  const native_open = window.open.bind(window);
+
+  window.open = (url, target) => (navigator.userActivation?.isActive ? native_open(url, target) : null);
+
   window.jQuery = (element) => ({ data: (key) => (key === "select2" && element?.matches?.(".js-inspectable-id") ? select2 : undefined) });
 
   window.addEventListener("load", () => {

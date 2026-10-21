@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NSS Appfolio Helper",
-  "version": "4.1.3",
+  "version": "4.1.4",
   "description": "Import AppFolio work orders into the ASH web app, bill approved work back in the AppFolio vendor portal, and put approved inspections into the property manager's AppFolio, as an ASH delivery worker.",
   "icons": {
     "16": "icons/16.png",
@@ -64,7 +64,7 @@
     {
       "matches": ["https://*.appfolio.com/maintenance/inspections*"],
       "exclude_matches": ["https://vendor.appfolio.com/*"],
-      "js": ["adapters/appfolio_pm/select2_bridge.js"],
+      "js": ["adapters/appfolio_pm/page_bridge.js"],
       "run_at": "document_idle",
       "world": "MAIN"
     }

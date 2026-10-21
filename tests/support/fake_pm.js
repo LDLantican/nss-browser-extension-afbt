@@ -132,6 +132,17 @@ export function fake_pm_command(world, tab_id, tab, command, args) {
       return { clicked: true };
     }
 
+    /* The address a row would open, read through page_bridge.js; nothing opens. */
+    case "row_url": {
+      need("list");
+
+      const found = list(books).find((i) => i.name.includes(String(args.tag || "")));
+
+      if (!found) throw new AdapterError("transient", `No row carries ${args.tag}.`);
+
+      return { url: `${origin_of(tab.url)}/inspections/${found.id}` };
+    }
+
     case "fill_new": {
       need("new");
 

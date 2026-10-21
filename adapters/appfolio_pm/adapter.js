@@ -53,6 +53,8 @@ const PROBE_HELPS = new Set([null, "session_not_live", "session_stale", "heartbe
 
 const HOST = /^[a-z0-9-]+\.appfolio\.com$/i;
 const INSPECTION_URL = /^https:\/\/([a-z0-9-]+\.appfolio\.com)\/inspections\/(\d+)/i;
+/* The id in the address a list row opens, wherever the page puts it (the pretend site keeps its route in the hash). */
+const ROW_ID = /\/inspections\/(\d+)(?:[/?#]|$)/;
 
 const squash = (text) => String(text ?? "").replace(/[ ​]/g, " ").replace(/\s+/g, " ").trim();
 
@@ -229,9 +231,10 @@ async function sheet(ctx) {
 // -- create ---------------------------------------------------------------------
 
 /**
- * Look for ASH's number on the list, narrowed to the property. Found: the
- * row's inspection is opened — AppFolio opens it in a new tab — to read its
- * id, and the tab is closed. Only a narrowed list is evidence of absence.
+ * Look for ASH's number on the list, narrowed to the property. Found: the id is
+ * read off the address the row would open (page_bridge.js), or, with no bridge,
+ * off the new tab AppFolio opens it in. Only a narrowed list is evidence of
+ * absence.
  *
  * @return {Promise<{found: boolean, settled: boolean, id?: string}>}
  */
@@ -240,6 +243,19 @@ async function search(ctx) {
   const result = await ctx.ask("find_in_list", { tag: inspection.public_id, street: inspection.street });
 
   if (!result?.found) return { found: false, settled: Boolean(result?.settled) };
+
+  /* The address the row would open, read without opening it: in a background
+     tab Chrome blocks the window AppFolio opens (2026-10-22). Only with no
+     bridge on the page is the row opened in a new tab, as before. */
+  const { url: row_url = null } = (await ctx.ask("row_url", { tag: inspection.public_id })) || {};
+
+  if (row_url) {
+    const id = ROW_ID.exec(row_url)?.[1];
+
+    if (!id) throw new AdapterError(TRANSIENT, `${inspection.public_id} is on the list, but its row gave no inspection address.`);
+
+    return { found: true, settled: true, id };
+  }
 
   const before = new Set((await ctx.tab_children()).map((tab) => tab.id));
 

@@ -81,7 +81,7 @@ async function site_for({ signed_in = true, inspections = 0 } = {}) {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
 
 export default {
-  async "the list is narrowed to the property, searched for ASH's number, and a row opens its inspection in a new tab"(t) {
+  async "the list is narrowed to the property, searched for ASH's number, and a row's inspection is read without opening it"(t) {
     const p = await site_for({ inspections: 1 });
 
     try {
@@ -100,16 +100,25 @@ export default {
       t.equal(absent.settled, true);
 
       const before = new Set((await chrome.tabs.query({})).map((tab) => tab.id));
+      const opened = async () => {
+        await new Promise((resolve) => setTimeout(resolve, 800));
 
+        return (await chrome.tabs.query({})).filter((tab) => !before.has(tab.id));
+      };
+
+      /* What the verification of 2026-10-22 met: a script's click on a row in
+         a background tab opens nothing, because Chrome blocks the window. */
       await p.ask("open_row", { tag: PM_HEADER.public_id });
-      await new Promise((resolve) => setTimeout(resolve, 800));
 
-      const opened = (await chrome.tabs.query({})).filter((tab) => !before.has(tab.id));
+      t.equal((await opened()).length, 0, "a script's click opened a window the popup blocker should have refused");
 
-      t.equal(opened.length, 1, "no tab, or more than one, was opened");
-      t.ok(String(opened[0]?.url || opened[0]?.pendingUrl).includes(`#/inspections/${p.made[0].id}`), "the tab is not the inspection");
+      const { url } = await p.ask("row_url", { tag: PM_HEADER.public_id });
+      const fresh = await opened();
 
-      for (const tab of opened) await chrome.tabs.remove(tab.id);
+      t.ok(String(url).includes(`#/inspections/${p.made[0].id}`), `the row gave ${url}, not its inspection`);
+      t.equal(fresh.length, 0, "reading the row's address opened a tab");
+
+      for (const tab of fresh) await chrome.tabs.remove(tab.id);
     } finally {
       await p.done();
     }

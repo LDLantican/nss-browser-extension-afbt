@@ -76,6 +76,8 @@
           return app.find_in_list(args);
         case "open_row":
           return app.open_row(args);
+        case "row_url":
+          return app.row_url(args);
         case "fill_new":
           return app.fill_new(args);
         case "start":
@@ -272,6 +274,36 @@
       return { clicked: true };
     },
 
+    /*
+     * The address a row would open, without opening it. AppFolio opens a row's
+     * inspection with window.open, which Chrome's popup blocker refuses for a
+     * script's click in a background tab (found 2026-10-22, when a verification
+     * saw INS-000004 on the list and could not open it). page_bridge.js makes
+     * the row's own click with window.open intercepted and hands back the
+     * address. `url: null` means there was no bridge, and the adapter opens the
+     * row in a tab the old way.
+     */
+    async row_url({ tag }) {
+      const row = app.rows().find((r) => r.textContent.includes(String(tag || "")));
+
+      if (!row) throw refuse(`No row carries ${tag}.`, "transient");
+
+      const cell = [...row.querySelectorAll("td.cursor-pointer, td")].find((td) => td.textContent.includes(String(tag))) || row;
+
+      cell.setAttribute("data-ash-open", "");
+
+      try {
+        const reply = await app.bridge("row_url");
+
+        if (reply.ok) return { url: reply.url };
+        if (reply.reason === "unavailable") return { url: null };
+
+        throw refuse(`The row for ${tag} gave no address: ${reply.reason}`, "transient");
+      } finally {
+        cell.removeAttribute("data-ash-open");
+      }
+    },
+
     // -- The new-inspection form ------------------------------------------------
 
     /**
@@ -302,7 +334,7 @@
      * The address box is select2 3, which searches only while its search box
      * has focus — and this is a background tab, where it never does. So the
      * search and the pick go through select2's own API, by way of
-     * select2_bridge.js in the page's world; typing is the fallback, for a
+     * page_bridge.js in the page's world; typing is the fallback, for a
      * page where the bridge finds no select2 to drive. Which result is taken
      * is decided here either way.
      */
@@ -312,7 +344,7 @@
 
       if (!opener) throw refuse("The form has no address search.");
 
-      const bridged = await app.select2("search", { term: street });
+      const bridged = await app.bridge("search", { input: S.address_value, term: street });
 
       if (!bridged.ok && bridged.reason !== "unavailable") throw refuse(`The address search failed: ${bridged.reason}`, "transient");
 
@@ -347,7 +379,7 @@
       if (bridged.ok) {
         pick.setAttribute("data-ash-pick", "");
 
-        const picked = await app.select2("pick", { results: S.address_pickable });
+        const picked = await app.bridge("pick", { input: S.address_value, results: S.address_pickable });
 
         if (!picked.ok) throw refuse(`The address could not be chosen: ${picked.reason}`, "transient");
       } else {
@@ -373,8 +405,8 @@
       return label;
     },
 
-    /** Ask select2_bridge.js, in the page's world, to drive select2. No answer is "unavailable". */
-    select2(op, args = {}) {
+    /** Ask page_bridge.js, in the page's world, to do one thing. No answer is "unavailable". */
+    bridge(op, args = {}) {
       const id = crypto.randomUUID();
 
       return new Promise((resolve) => {
@@ -390,16 +422,16 @@
           if (reply?.id !== id) return;
 
           clearTimeout(timer);
-          document.removeEventListener("ash:select2:done", done);
+          document.removeEventListener("ash:bridge:done", done);
           resolve(reply);
         };
         const timer = setTimeout(() => {
-          document.removeEventListener("ash:select2:done", done);
+          document.removeEventListener("ash:bridge:done", done);
           resolve({ ok: false, reason: "unavailable" });
         }, BRIDGE_MS);
 
-        document.addEventListener("ash:select2:done", done);
-        document.dispatchEvent(new CustomEvent("ash:select2", { detail: JSON.stringify({ id, op, input: S.address_value, ...args }) }));
+        document.addEventListener("ash:bridge:done", done);
+        document.dispatchEvent(new CustomEvent("ash:bridge", { detail: JSON.stringify({ id, op, ...args }) }));
       });
     },
 
