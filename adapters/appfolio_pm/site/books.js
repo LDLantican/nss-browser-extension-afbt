@@ -62,8 +62,29 @@ export function search_units(books, query) {
     .flatMap((unit) => [unit, { kind: "resident", label: `A Resident - ${unit.label}`, street: unit.street, address: unit.address }]);
 }
 
+/*
+ * OK and FOLLOW-UP are two switches, not one answer, and either can be on with
+ * the other (read on Camelot's AppFolio, 2026-10-22). `result` is kept beside
+ * them as what a person reading the sheet would call it, "both" included.
+ */
 function item(books, name) {
-  return { id: `item_${books.next_item++}`, name, result: null, note: "", photos: 0 };
+  return { id: `item_${books.next_item++}`, name, ok: false, flag: false, result: null, note: "", photos: 0 };
+}
+
+function settle(target) {
+  target.result = target.ok && target.flag ? "both" : target.flag ? "follow_up" : target.ok ? "ok" : null;
+}
+
+/** A switch pressed: it flips, and is saved at once, form open or not. */
+export function press(books, id, item_id, which) {
+  const inspection = by_id(books, id);
+  const target = inspection.areas.flatMap((a) => a.items).find((i) => i.id === item_id);
+
+  inspection.saves++;
+  target[which] = !target[which];
+  settle(target);
+
+  return target;
 }
 
 function area(books, name, items = []) {
@@ -144,8 +165,19 @@ export function save_item(books, id, item_id, { result, note, photos = 0 }) {
   const target = inspection.areas.flatMap((a) => a.items).find((i) => i.id === item_id);
 
   inspection.saves++;
-  if (result !== undefined) target.result = result;
-  if (note !== undefined) target.note = String(note ?? "");
+
+  /* A whole answer, as a new item's first Save or the Node fakes give it: that
+     switch on, the other off. */
+  if (result !== undefined) {
+    target.ok = result === "ok";
+    target.flag = result === "follow_up";
+    settle(target);
+  }
+
+  /* `drop_notes` makes the next saves lose their note, as the background tab
+     of 2026-10-22 did, so a page that says Saved and kept nothing is tested. */
+  if (note !== undefined && books.drop_notes > 0) books.drop_notes--;
+  else if (note !== undefined) target.note = String(note ?? "");
 
   if (photos > 0) {
     inspection.uploads++;

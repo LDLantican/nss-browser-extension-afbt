@@ -41,6 +41,8 @@
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const refuse = (message, error_class = "adapter_broken") => Object.assign(new Error(message), { error_class });
+  /* As adapter.js compares notes: spacing and zero-width spaces do not count. */
+  const squash = (text) => String(text ?? "").replace(/[ ​]/g, " ").replace(/\s+/g, " ").trim();
 
   const app = {
     staged: [],
@@ -430,7 +432,9 @@
 
       return {
         name: input ? input.value.trim() : li.querySelector(S.item_name)?.textContent.trim() || "",
-        result: chosen(S.flag) ? "follow_up" : chosen(S.ok) ? "ok" : null,
+        /* Two switches, which can both be on; "both" is not an answer ASH
+           gives, so the fill sees it as a difference and puts it right. */
+        result: chosen(S.flag) && chosen(S.ok) ? "both" : chosen(S.flag) ? "follow_up" : chosen(S.ok) ? "ok" : null,
         note: li.querySelector(S.description)?.textContent.trim() || "",
         photos: li.querySelectorAll(S.photo_thumb).length,
       };
@@ -534,18 +538,43 @@
     },
 
     /** Make one item OK or Follow-up, with its note, and Save. */
+    /*
+     * An item's answer and note, as read live on 2026-10-22: OK and FOLLOW-UP
+     * are two switches, each saved the moment it is pressed (in the form or
+     * not, and Cancel does not take it back), and either can be on with the
+     * other. So the wanted one is put on and the other off, each press waited
+     * for. The note is written after, into the form as it then stands — opened
+     * again if a press closed it — and must show on the item once saved: the
+     * background tab of 2026-10-22 pressed Save, saw the form close and kept no
+     * note, and nothing said so.
+     */
     async set_item(args) {
-      const chosen = args.result === "follow_up" ? S.flag : S.ok;
-
       await app.edit(args);
 
-      if (!T.chosen.test(app.item_li(args).querySelector(chosen)?.className || "")) {
-        app.press(app.item_li(args).querySelector(chosen), args.result === "follow_up" ? "Follow-up" : "OK");
-        await app.until(() => T.chosen.test(app.find_li(args)?.querySelector(chosen)?.className || ""), "The answer did not take.", RESULT_MS);
+      for (const [selector, wanted, what] of [
+        [S.flag, args.result === "follow_up", "Follow-up"],
+        [S.ok, args.result === "ok", "OK"],
+      ]) {
+        const on = () => T.chosen.test(app.find_li(args)?.querySelector(selector)?.className || "");
+
+        if (on() === wanted) continue;
+
+        app.press(app.item_li(args).querySelector(selector), what);
+        await app.until(() => (on() === wanted ? true : null), `${what} on ${args.item} did not ${wanted ? "take" : "come off"}.`, RESULT_MS);
       }
 
+      const note = squash(args.note);
+
+      if (squash(app.read_item(app.item_li(args)).note) === note && !app.item_li(args).querySelector(S.notes)) return { saved: args.item };
+
+      await app.edit(args);
       app.type(app.item_li(args).querySelector(S.notes), args.note ?? "");
       await app.save(args);
+      await app
+        .until(() => (squash(app.read_item(app.item_li(args)).note) === note ? true : null), `The note on ${args.item} did not take.`, SAVE_MS)
+        .catch((error) => {
+          throw refuse(error.message, "transient");
+        });
 
       return { saved: args.item };
     },

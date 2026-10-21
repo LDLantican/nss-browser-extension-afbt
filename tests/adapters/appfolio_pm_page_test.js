@@ -222,6 +222,61 @@ export default {
     }
   },
 
+  async "an answer is one switch on and the other off, and a note that did not take is said so"(t) {
+    const p = await site_for({ inspections: 1 });
+    const kitchen = (name) => ({ area: "Kitchen", area_nth: 0, item: name, item_nth: 0 });
+    const item_of = async (name) => find_item(find_area((await p.read()).inspections[p.made[0].id], "Kitchen"), name);
+    const books_set = async (change) => {
+      const books = await p.read();
+
+      change(books);
+      await chrome.storage.local.set({ [p.store]: books });
+    };
+
+    try {
+      /* Both switches on, as a press of OK inside the form left one on 2026-10-22. */
+      await books_set((books) => {
+        const fridge = find_item(find_area(books.inspections[p.made[0].id], "Kitchen"), "Refrigerator");
+
+        Object.assign(fridge, { ok: true, flag: true, result: "both" });
+      });
+      await p.go(`/inspections/${p.made[0].id}`);
+
+      t.equal((await p.ask("sheet")).areas[0].items.find((i) => i.name === "Refrigerator").result, "both", "both switches on read as one answer");
+
+      await p.ask("set_item", { ...kitchen("Refrigerator"), result: "ok", note: "Seal is fine" });
+      await settle();
+
+      const fridge = await item_of("Refrigerator");
+
+      t.deep([fridge.ok, fridge.flag, fridge.note], [true, false, "Seal is fine"], "FOLLOW-UP was left on, or the note lost");
+
+      /* The page says Saved and keeps no note: refused, not reported done. */
+      await books_set((books) => {
+        books.drop_notes = 1;
+      });
+
+      let refused = null;
+
+      try {
+        await p.ask("set_item", { ...kitchen("Sink"), result: "follow_up", note: "Drips under the trap" });
+      } catch (error) {
+        refused = error;
+      }
+
+      t.ok(refused && /did not take/.test(refused.message), `a lost note was not refused (${refused?.message})`);
+      t.equal(refused?.error_class, "transient");
+      t.deep([(await item_of("Sink")).flag, (await item_of("Sink")).note], [true, ""], "the switch is saved by its press, the note is not");
+
+      await p.ask("set_item", { ...kitchen("Sink"), result: "follow_up", note: "Drips under the trap" });
+      await settle();
+
+      t.equal((await item_of("Sink")).note, "Drips under the trap", "the next try did not save the note");
+    } finally {
+      await p.done();
+    }
+  },
+
   async "photographs are staged, attached to the item's form and saved with it"(t) {
     const p = await site_for({ inspections: 1 });
     const jpeg = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9));

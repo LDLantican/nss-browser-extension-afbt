@@ -23,6 +23,7 @@ import {
   empty_books,
   list,
   mark_done,
+  press,
   save_item,
   search_units,
 } from "./books.js";
@@ -114,7 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
           (i) => `<tr data-open="${i.id}"><td><input type="checkbox" class="mx-1"></td><td class="cursor-pointer">${app.escape(i.date)}</td>
             <td class="cursor-pointer"><div class="ms-2"><span class="badge badge-secondary">${app.escape(i.status)}</span></div></td>
             <td class="cursor-pointer">${app.escape(i.name)}</td><td class="cursor-pointer">${app.escape(i.street)}</td>
-            <td class="cursor-pointer">Inspection</td><td class="cursor-pointer"><span>${i.areas.flatMap((a) => a.items).filter((x) => x.result === "follow_up").length}</span></td></tr>`,
+            <td class="cursor-pointer">Inspection</td><td class="cursor-pointer"><span>${i.areas.flatMap((a) => a.items).filter((x) => x.flag).length}</span></td></tr>`,
         )
         .join("");
       const options = app.filter.typed
@@ -190,10 +191,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const item_html = (area, item) => {
         const editing = app.editing?.item_id === item.id ? app.editing : null;
-        const result = editing ? editing.result : item.result;
+        /* Two switches, each on or off by itself. Only an item not yet saved
+           keeps its answer in the form; an existing one shows what is saved,
+           because a press saves at once. */
+        const ok = editing?.new_in ? editing.result === "ok" : Boolean(item.ok);
+        const flag = editing?.new_in ? editing.result === "follow_up" : Boolean(item.flag);
         const buttons = `<div class="ms-4 d-flex align-items-center justify-content-end">
-            <button type="button" class="js-check-circle me-2 btn btn-outline-link${result === "ok" ? " active" : ""}" data-action="ok" data-item="${item.id}">OK</button>
-            <button type="button" class="js-flag btn btn-outline-link${result === "follow_up" ? " active" : ""}" data-action="flag" data-item="${item.id}">FOLLOW-UP</button>
+            <button type="button" class="js-check-circle me-2 btn btn-outline-link${ok ? " active" : ""}" data-action="ok" data-item="${item.id}">OK</button>
+            <button type="button" class="js-flag btn btn-outline-link${flag ? " active" : ""}" data-action="flag" data-item="${item.id}">FOLLOW-UP</button>
             ${editing ? "" : `<button type="button" class="js-edit-item btn btn-link" data-action="edit" data-item="${item.id}">Edit</button>`}</div>`;
         const thumbs = Array.from({ length: item.photos }, () => `<div class="d-inline-block position-relative"><button class="me-2 my-1 rounded btn btn-outline-light"></button></div>`).join("");
 
@@ -284,11 +289,20 @@ document.addEventListener("DOMContentLoaded", () => {
           return app.render();
         }
 
+        /* As AppFolio does: a press flips that switch alone and saves it at
+           once, form open or not, and Cancel does not take it back. A new item
+           has nothing saved to flip, so its form keeps the answer for Save. */
         case "ok":
         case "flag":
-          if (app.editing?.item_id !== control.dataset.item) return undefined;
-          app.editing.result = action === "ok" ? "ok" : "follow_up";
-          app.capture_fields();
+          if (app.editing) app.capture_fields();
+
+          if (app.editing?.new_in && app.editing.item_id === control.dataset.item) {
+            app.editing.result = action === "ok" ? "ok" : "follow_up";
+
+            return app.render();
+          }
+
+          await app.change((books) => press(books, here.id, control.dataset.item, action === "ok" ? "ok" : "flag"));
 
           return app.render();
 
@@ -311,7 +325,7 @@ document.addEventListener("DOMContentLoaded", () => {
               if (editing.result !== null || editing.note) save_item(books, here.id, made.id, { result: editing.result, note: editing.note });
             });
           } else {
-            await app.change((books) => save_item(books, here.id, editing.item_id, { result: editing.result, note: editing.note, photos: editing.files }));
+            await app.change((books) => save_item(books, here.id, editing.item_id, { note: editing.note, photos: editing.files }));
           }
 
           return app.render();
