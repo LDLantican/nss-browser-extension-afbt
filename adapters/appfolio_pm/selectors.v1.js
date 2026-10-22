@@ -15,9 +15,10 @@
  *                    AppFolio's `js-*` classes
  *
  * Not seen live, because seeing them would have meant saving: the confirmation
- * (if any) after Delete Item, Delete Area and Mark Inspection Done, and how a
- * new area's name is saved. Those guesses are marked; the rollout ladder's
- * probe and dry run check them. Seen on 2026-10-22, on a test inspection: the
+ * (if any) after Delete Item, Delete Area and Mark Inspection Done (pressed by
+ * hand on 2026-10-22, but whether it asked was not recorded). A new area's
+ * name is saved by Enter, seen 2026-10-22: the card shows the name at once and
+ * is replaced by the saved one, Add Item enabled, about 0.6 s later. Seen on 2026-10-22, on a test inspection: the
  * Follow-up button's chosen state is `active`, as OK's is, and OK and
  * FOLLOW-UP are two switches, each saved the moment it is pressed, which can
  * both be on (page.js's set_item).

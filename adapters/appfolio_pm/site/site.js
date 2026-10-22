@@ -226,7 +226,11 @@ document.addEventListener("DOMContentLoaded", () => {
             <button type="button" class="js-add-item w-100 btn btn-link" data-action="add_item" data-area="${area.id}">Add Item</button></div></div>`,
         )
         .join("");
-      const new_area = app.editing?.new_area ? `<div class="mb-4 card"><div class="card-header"><div class="col-12"><input class="js-area-name-input form-control" placeholder="Enter an area name..."></div></div></div>` : "";
+      const new_area = app.editing?.new_area
+        ? `<div class="mb-4 card"><div class="card-header"><div class="col-12"><input class="js-area-name-input form-control" placeholder="Enter an area name..."></div></div></div>`
+        : app.editing?.saving_area
+          ? `<div class="mb-4 card"><div class="py-3 card-header"><button type="button" class="js-area-name btn btn-link">${app.escape(app.editing.saving_area)}</button></div><div class="card-body"><ul class="list-group"></ul><button type="button" class="js-add-item w-100 btn btn-link" disabled>Add Item</button></div></div>`
+          : "";
 
       app.main.innerHTML = `<header><h1 class="js-inspection-title">${app.escape(inspection.name)}</h1><span class="ms-4 me-1">${app.escape(inspection.status)}</span>
           <span class="js-inspection-date">Inspection Date: ${app.escape(inspection.date)}</span></header>
@@ -450,10 +454,19 @@ document.addEventListener("DOMContentLoaded", () => {
       return undefined;
     },
 
+    /*
+     * As AppFolio does (2026-10-22): the card shows the name at once, with Add
+     * Item still disabled, and the saved card replaces it about 0.6 s later.
+     */
     async keep_area(input) {
       const name = input.value.trim();
 
       if (!name || !app.editing?.new_area) return;
+
+      app.editing = { saving_area: name };
+      app.render();
+
+      await new Promise((resolve) => setTimeout(resolve, 600));
 
       app.editing = null;
       await app.change((books) => add_area(books, app.route().id, name));

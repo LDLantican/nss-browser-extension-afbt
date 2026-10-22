@@ -545,12 +545,25 @@
       );
 
       app.type(input, name);
-      /* A guess, not yet seen live: the name is kept on Enter, or on leaving the field. */
-      input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", code: "Enter", keyCode: 13 }));
-      input.blur();
-      input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
 
-      await app.until(() => app.area_cards().some((c) => c.querySelector(S.area_name)?.textContent.trim() === name), `The area "${name}" was not kept.`, SAVE_MS);
+      /*
+       * Enter saves the name (read live on 2026-10-22; leaving the field would
+       * too, but a background tab's field never has focus to leave, and one
+       * save is wanted, not two). The card shows the name at once, with Add
+       * Item still disabled, and is replaced by the saved one about 0.6 s
+       * later: kept means that saved card, Add Item enabled. Taking the first
+       * for the second is how a fill once pressed a disabled Add Item.
+       */
+      input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", code: "Enter", keyCode: 13 }));
+
+      await app.until(
+        () =>
+          app.area_cards().some((c) => c.querySelector(S.area_name)?.textContent.trim() === name && c.querySelector(S.add_item)?.disabled === false)
+            ? true
+            : null,
+        `The area "${name}" was not kept.`,
+        SAVE_MS,
+      );
 
       return { added: name };
     },
@@ -568,12 +581,18 @@
       }, "Add Item did not add an item with a name field.", RESULT_MS);
 
       app.type(field, name);
-      await app.save({ area, area_nth, item: name, item_nth: app.count_named({ area, area_nth, item: name }) - 1 });
+
+      const where = { area, area_nth, item: name, item_nth: app.count_named({ area, area_nth, item: name }) - 1 };
+
+      await app.save(where);
+
+      /* Saved, as an area is: the item shows with its Edit button usable, not
+         merely the form gone (2026-10-22). */
+      await app.until(() => (app.find_li(where)?.querySelector(S.edit)?.disabled === false ? true : null), `The item "${name}" was not kept.`, SAVE_MS);
 
       return { added: name };
     },
 
-    /** Make one item OK or Follow-up, with its note, and Save. */
     /*
      * An item's answer and note, as read live on 2026-10-22: OK and FOLLOW-UP
      * are two switches, each saved the moment it is pressed (in the form or
