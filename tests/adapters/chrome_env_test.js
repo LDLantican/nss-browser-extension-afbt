@@ -16,6 +16,40 @@ import { INVOICE, INVOICE_TOTAL, registry } from "../support/scenario.js";
 import { SITE_KEY } from "../../adapters/fixture/site/ledger.js";
 
 export default {
+  async "a page that takes a command and never answers is a failure in seconds, not a worker held for minutes"(t) {
+    const env = create_chrome_env();
+    const tab = await chrome.tabs.create({ url: chrome.runtime.getURL("tests/support/silent_page.html"), active: false });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+
+      const asked = async (options) => {
+        const started = Date.now();
+
+        try {
+          await env.page.send(tab.id, "sheet", {}, options);
+
+          return { error: null, ms: Date.now() - started };
+        } catch (error) {
+          return { error, ms: Date.now() - started };
+        }
+      };
+
+      const read = await asked({ timeout_ms: 2000 });
+
+      t.equal(read.error?.error_class, "transient", `a silent page's read ended ${read.error?.error_class}: ${read.error?.message}`);
+      t.ok(/"sheet"/.test(read.error?.message || ""), "the error does not name the command");
+      t.ok(read.ms < 5000, `waited ${read.ms} ms on a silent page`);
+
+      const press = await asked({ once: true, timeout_ms: 2000 });
+
+      t.equal(press.error?.error_class, "unknown_outcome", "a press the page took but never confirmed must be unknown, never retried");
+      t.ok(press.ms < 5000, `waited ${press.ms} ms on a silent page`);
+    } finally {
+      await chrome.tabs.remove(tab.id).catch(() => null);
+    }
+  },
+
   async "a job runs in a real background tab and bills the fixture site once"(t) {
     const number = `WO-T${Date.now()}`;
     const world = create_world();

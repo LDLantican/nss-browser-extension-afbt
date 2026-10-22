@@ -229,13 +229,30 @@ export function create_chrome_env() {
 
           let answer;
           let unreached = false;
+          let silent = false;
 
           try {
             /* An extension page in a tab (the fixture site) hears runtime
                messages; a content script on a real portal hears tab messages. */
-            answer = String(tab.url || "").startsWith(own_pages)
-              ? await chrome.runtime.sendMessage(message)
-              : await chrome.tabs.sendMessage(tab_id, message);
+            const sent = String(tab.url || "").startsWith(own_pages)
+              ? chrome.runtime.sendMessage(message)
+              : chrome.tabs.sendMessage(tab_id, message);
+
+            /*
+             * A page that takes the message and never answers would hold this
+             * await for ever — until Chrome stops the service worker, minutes
+             * later, with the lease long gone and nothing reported (the fill
+             * on AppFolio inspection 925, 2026-10-22). So one wait is never
+             * longer than the time this command has left.
+             */
+            answer = await Promise.race([
+              sent,
+              sleep(Math.max(1000, until - Date.now())).then(() => {
+                silent = true;
+
+                return undefined;
+              }),
+            ]);
           } catch (error) {
             unreached = /Receiving end does not exist/i.test(String(error?.message || ""));
             answer = undefined;
@@ -247,10 +264,13 @@ export function create_chrome_env() {
             throw new AdapterError(answer.error_class || "adapter_broken", answer.error || `The page refused "${command}".`);
           }
 
-          if (once && !unreached)
-            throw new AdapterError(UNKNOWN_OUTCOME, `The page did not confirm "${command}", so nobody knows whether it happened.`);
+          const where = String(tab.url || "").replace(/[?#].*$/, "");
 
-          if (Date.now() > until) throw new AdapterError(TRANSIENT, `The page did not answer "${command}".`);
+          if (once && !unreached)
+            throw new AdapterError(UNKNOWN_OUTCOME, `The page did not confirm "${command}" (${where}), so nobody knows whether it happened.`);
+
+          if (silent || Date.now() > until)
+            throw new AdapterError(TRANSIENT, `The page took "${command}" and did not answer within ${Math.round(timeout_ms / 1000)} s (${where}).`);
 
           await sleep(250);
         }
