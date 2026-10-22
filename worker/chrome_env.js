@@ -269,8 +269,18 @@ export function create_chrome_env() {
           if (once && !unreached)
             throw new AdapterError(UNKNOWN_OUTCOME, `The page did not confirm "${command}" (${where}), so nobody knows whether it happened.`);
 
-          if (silent || Date.now() > until)
+          /* Two different failures, told apart so the next one says which: no
+             ASH script on the page to hear it, or one that heard and went quiet. */
+          if (silent)
             throw new AdapterError(TRANSIENT, `The page took "${command}" and did not answer within ${Math.round(timeout_ms / 1000)} s (${where}).`);
+
+          if (Date.now() > until)
+            throw new AdapterError(
+              TRANSIENT,
+              unreached
+                ? `No ASH script on the page heard "${command}" within ${Math.round(timeout_ms / 1000)} s (${where}).`
+                : `The page did not answer "${command}" within ${Math.round(timeout_ms / 1000)} s (${where}).`,
+            );
 
           await sleep(250);
         }

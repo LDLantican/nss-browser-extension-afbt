@@ -786,6 +786,12 @@
     },
   };
 
-  if (document.readyState === "complete") app.init();
-  else window.addEventListener("load", () => app.init(), { once: true });
+  /*
+   * Listening from the moment of injection, not from the page's `load`: in the
+   * worker's background tab AppFolio's inspection page could take tens of
+   * seconds to fire `load`, and every command until then found nobody there
+   * (2026-10-22). Whether the page is ready is each command's own question
+   * (`ready()`, which waits for it to render).
+   */
+  app.init();
 })();

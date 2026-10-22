@@ -40,7 +40,7 @@ export const LIST_PATH = "/maintenance/inspections";
 export const NEW_PATH = "/maintenance/inspections/new?inspection%5Btemplate%5D=0";
 
 const SESSION_FRESH_MS = 4 * 60 * 1000;
-const PROBE_MS = 20000;
+const PROBE_MS = 30000;
 const LOOK_MS = 15000;
 const LOOK_POLL_MS = 1000;
 const NEW_TAB_MS = 15000;
