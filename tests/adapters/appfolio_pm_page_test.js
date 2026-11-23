@@ -286,6 +286,37 @@ export default {
     }
   },
 
+  async "a note is written only once the switch's own save is stored, so the switch cannot undo it"(t) {
+    const p = await site_for({ inspections: 1 });
+    const kitchen = (name) => ({ area: "Kitchen", area_nth: 0, item: name, item_nth: 0 });
+
+    try {
+      /* Toilet's note on 925 (2026-10-22): FOLLOW-UP shows at once, its save
+         lands 1.5 s later carrying the item as it was pressed, and a note saved
+         in between is gone. */
+      const books = await p.read();
+
+      books.slow_switch_ms = 1500;
+      await chrome.storage.local.set({ [p.store]: books });
+      await p.go(`/inspections/${p.made[0].id}`);
+
+      const started = Date.now();
+
+      await p.ask("set_item", { ...kitchen("Sink"), result: "follow_up", note: "Drips under the trap" });
+
+      t.ok(Date.now() - started >= 1500, "set_item answered before the switch's save was stored");
+
+      /* Anything still in flight would have landed by now. */
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+
+      const sink = find_item(find_area((await p.read()).inspections[p.made[0].id], "Kitchen"), "Sink");
+
+      t.deep([sink.flag, sink.ok, sink.note], [true, false, "Drips under the trap"], "the switch's late save undid the note");
+    } finally {
+      await p.done();
+    }
+  },
+
   async "photographs are staged, attached to the item's form and saved with it"(t) {
     const p = await site_for({ inspections: 1 });
     const jpeg = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9));

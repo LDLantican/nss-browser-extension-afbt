@@ -215,6 +215,38 @@ export default {
     t.equal(run.life.trace.some((name) => /page\.send:(set_item|add_item|add_area)/.test(name)), false);
   },
 
+  async "a note gone when the inspection is loaded again is written again, from the fresh page"(t) {
+    const { world, delivery, inspection } = await pm_world({ operation: "fill_areas" });
+
+    /* As Toilet's note on 925 (2026-10-22): shown after its Save, gone on reload. */
+    world.pm.drop_notes = 1;
+
+    const run = await tick(world);
+    const found = by_id(world.pm, inspection.id);
+    /* Every note written, and the lost one twice, is followed by a fresh load. */
+    const notes = pm_areas().flatMap((a) => a.items).filter((i) => String(i.note || "").trim() !== "").length;
+    const loads = run.life.trace.filter((name) => name === "tabs.navigate").length;
+
+    t.equal(delivery.status, "succeeded", `ended ${delivery.status} (${delivery.last_message})`);
+    t.equal(find_item(find_area(found, "Kitchen"), "Sink").note, "Drips under the trap", "the lost note was not written again");
+    t.ok(loads >= notes + 1, `the inspection was loaded ${loads} times for ${notes + 1} notes written`);
+    t.equal(reconcile(sheet(found), pm_areas()).length, 0);
+  },
+
+  async "a note that never stays is unknown after three tries, not two hundred"(t) {
+    const { world, delivery, inspection } = await pm_world({ operation: "fill_areas" });
+
+    world.pm.drop_notes = 1000;
+
+    const run = await tick(world);
+    const sink_tries = run.life.trace.filter((name) => name === "page.send:set_item").length;
+
+    t.ok(delivery.history.includes("committing->outcome_unknown"), `never went through outcome_unknown: ${delivery.history}`);
+    t.ok(/did not stay saved in AppFolio after 3 tries/.test(String(delivery.last_message)), `said: ${delivery.last_message}`);
+    t.ok(sink_tries <= 3 + pm_areas().flatMap((a) => a.items).length, `${sink_tries} set_items for one note`);
+    t.equal(find_item(find_area(by_id(world.pm, inspection.id), "Kitchen"), "Sink").note, "", "a note was kept that the books said to drop");
+  },
+
   async "an item with something in it that ASH does not have is left alone"(t) {
     const { world, delivery, inspection } = await pm_world({ operation: "fill_areas" });
     const found = by_id(world.pm, inspection.id);

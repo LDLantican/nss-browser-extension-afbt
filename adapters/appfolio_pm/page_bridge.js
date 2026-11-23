@@ -1,11 +1,11 @@
 /**
  * The appfolio_pm adapter's reach into AppFolio's own JavaScript, run in the
- * page's world ("world": "MAIN" in the manifest) on the inspection list and the
- * New Inspection form. page.js cannot do these from the extension's isolated
+ * page's world ("world": "MAIN" in the manifest) on the inspection list, the
+ * New Inspection form and an inspection. page.js cannot do these from the extension's isolated
  * world, and the worker's tab is a background tab in the collapsed ASH group,
  * where the page's own controls do not behave as they do under a person's hand.
  *
- * Two things, each found by a live run on 2026-10-22:
+ * Three things, each found by a live run on 2026-10-22:
  *
  *   select2   The address box is select2 3, which searches only while its box
  *             has focus — which a background tab never gives it — so typed
@@ -18,6 +18,15 @@
  *             list but could never open it. The row's own click is made with
  *             window.open intercepted for that moment, and the address it
  *             would have opened is handed back; nothing is opened.
+ *   network   Pressing OK or FOLLOW-UP saves at once, and the page shows the
+ *             switch on before AppFolio has stored it. A note saved in that
+ *             gap was undone when the switch's save landed after it (Toilet's
+ *             note on 925). So every request that writes — anything but a GET,
+ *             by fetch or XMLHttpRequest — is counted from the moment the page
+ *             sends it until its answer arrives, and page.js waits for the
+ *             count to come back to nothing before it goes on. This runs at
+ *             document_start, before AppFolio's own scripts can keep a fetch
+ *             of their own.
  *
  * It decides nothing: which result fits, which row is meant and what the address
  * says are page.js's and adapter.js's rules. It is asked with an `ash:bridge`
@@ -32,6 +41,87 @@
   window.ash_page_bridge = true;
 
   const METHODS = ["opened", "open", "updateResults", "highlight", "selectHighlighted"];
+
+  /*
+   * Every request that writes, from send to answer. A GET never stores
+   * anything, and a page that polls with one would otherwise never be quiet.
+   * `failed` counts only this site's own writes refused or lost, because an
+   * analytics beacon a blocker drops says nothing about a save.
+   */
+  const net = { inflight: 0, started: 0, failed: 0, last_failure: null, last_at: performance.now() };
+
+  const writes = (method) => String(method || "GET").toUpperCase() !== "GET" && String(method || "").toUpperCase() !== "HEAD";
+  const own = (url) => {
+    try {
+      return new URL(String(url), location.href).origin === location.origin;
+    } catch {
+      return false;
+    }
+  };
+  const begin = () => {
+    net.inflight++;
+    net.started++;
+    net.last_at = performance.now();
+  };
+  const end = (url, failure) => {
+    net.inflight = Math.max(0, net.inflight - 1);
+    net.last_at = performance.now();
+
+    if (failure && own(url)) {
+      net.failed++;
+      net.last_failure = failure;
+    }
+  };
+
+  const native_fetch = window.fetch;
+
+  if (typeof native_fetch === "function") {
+    window.fetch = function (input, init) {
+      const method = init?.method || (input instanceof Request ? input.method : "GET");
+      const url = input instanceof Request ? input.url : String(input);
+
+      if (!writes(method)) return native_fetch.apply(this, arguments);
+
+      begin();
+
+      return native_fetch.apply(this, arguments).then(
+        (response) => {
+          end(url, response.ok ? null : `HTTP ${response.status}`);
+
+          return response;
+        },
+        (error) => {
+          end(url, String(error?.message || error));
+
+          throw error;
+        },
+      );
+    };
+  }
+
+  const xhr_open = XMLHttpRequest.prototype.open;
+  const xhr_send = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function (method, url) {
+    this.ash_request = { method, url };
+
+    return xhr_open.apply(this, arguments);
+  };
+
+  XMLHttpRequest.prototype.send = function () {
+    const request = this.ash_request;
+
+    if (request && writes(request.method)) {
+      begin();
+      this.addEventListener(
+        "loadend",
+        () => end(request.url, this.status >= 200 && this.status < 400 ? null : this.status ? `HTTP ${this.status}` : "no answer"),
+        { once: true },
+      );
+    }
+
+    return xhr_send.apply(this, arguments);
+  };
 
   const answer = (id, reply) => {
     document.dispatchEvent(new CustomEvent("ash:bridge:done", { detail: JSON.stringify({ id, ...reply }) }));
@@ -73,6 +163,18 @@
       select2.selectHighlighted({ noFocus: true });
 
       return { ok: true };
+    },
+
+    /* How the page's writes stand: page.js decides what "stored" means. */
+    network() {
+      return {
+        ok: true,
+        inflight: net.inflight,
+        started: net.started,
+        failed: net.failed,
+        last_failure: net.last_failure,
+        idle_ms: Math.round(performance.now() - net.last_at),
+      };
     },
 
     row_url() {

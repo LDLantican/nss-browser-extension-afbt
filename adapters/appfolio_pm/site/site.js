@@ -35,6 +35,8 @@ document.addEventListener("DOMContentLoaded", () => {
     filter: { open: false, street: "", typed: "" },
     form: { query: "", chosen: null, open: false },
     editing: null,
+    /* Switch presses sent and not yet stored: item id -> "ok" | "flag". */
+    pending: new Map(),
 
     init() {
       app.key = new URLSearchParams(location.search).get("store") || BOOKS_KEY;
@@ -64,7 +66,16 @@ document.addEventListener("DOMContentLoaded", () => {
       return books || empty_books();
     },
 
-    async change(mutate) {
+    /*
+     * Every write goes to the pretend server first, as AppFolio's go to its
+     * GraphQL endpoint, so page_bridge.js sees it in flight (site/network.js
+     * answers it after `delay` ms, with nothing leaving the page). The books
+     * are read after the answer: a write that took a while lands on whatever
+     * was stored meanwhile.
+     */
+    async change(mutate, delay = 0) {
+      await fetch(`${location.origin}/__pretend_save?delay=${delay}`, { method: "POST" });
+
       const books = await app.load();
       const out = mutate(books);
 
@@ -194,8 +205,10 @@ document.addEventListener("DOMContentLoaded", () => {
         /* Two switches, each on or off by itself. Only an item not yet saved
            keeps its answer in the form; an existing one shows what is saved,
            because a press saves at once. */
-        const ok = editing?.new_in ? editing.result === "ok" : Boolean(item.ok);
-        const flag = editing?.new_in ? editing.result === "follow_up" : Boolean(item.flag);
+        /* A press is shown at once, before it is stored, as AppFolio's are. */
+        const pending = app.pending.get(item.id);
+        const ok = editing?.new_in ? editing.result === "ok" : Boolean(item.ok) !== (pending === "ok");
+        const flag = editing?.new_in ? editing.result === "follow_up" : Boolean(item.flag) !== (pending === "flag");
         const buttons = `<div class="ms-4 d-flex align-items-center justify-content-end">
             <button type="button" class="js-check-circle me-2 btn btn-outline-link${ok ? " active" : ""}" data-action="ok" data-item="${item.id}">OK</button>
             <button type="button" class="js-flag btn btn-outline-link${flag ? " active" : ""}" data-action="flag" data-item="${item.id}">FOLLOW-UP</button>
@@ -307,9 +320,32 @@ document.addEventListener("DOMContentLoaded", () => {
             return app.render();
           }
 
-          await app.change((books) => press(books, here.id, control.dataset.item, action === "ok" ? "ok" : "flag"));
+          {
+            const which = action === "ok" ? "ok" : "flag";
+            const item_id = control.dataset.item;
+            /*
+             * `slow_switch_ms`: the switch's save is answered that much later
+             * and stores the item as it was when pressed, so a note saved in
+             * the meantime is undone — Toilet's note on 925, 2026-10-22.
+             */
+            const slow = Number((await app.load()).slow_switch_ms || 0);
+            const pressed = slow ? by_id(await app.load(), here.id).areas.flatMap((a) => a.items).find((i) => i.id === item_id) : null;
 
-          return app.render();
+            app.pending.set(item_id, which);
+            await app.render();
+
+            try {
+              await app.change((books) => {
+                const target = press(books, here.id, item_id, which);
+
+                if (pressed) target.note = pressed.note;
+              }, slow);
+            } finally {
+              app.pending.delete(item_id);
+            }
+
+            return app.render();
+          }
 
         case "cancel":
           app.editing = null;

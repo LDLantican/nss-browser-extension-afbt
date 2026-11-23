@@ -47,6 +47,8 @@ const NEW_TAB_MS = 15000;
 const PERSON_WAIT_MS = 10 * 60 * 1000;
 const PERSON_POLL_MS = 2000;
 const MAX_ACTIONS = 200;
+/* The same change asked of AppFolio this often and still not there is not going to stay. */
+const SAME_CHANGE_TRIES = 3;
 
 /** Reasons a probe tab could change; anything else a probe cannot fix. */
 const PROBE_HELPS = new Set([null, "session_not_live", "session_stale", "heartbeat_stale", "adapter_not_reported"]);
@@ -439,6 +441,24 @@ export function reconcile(page, wanted) {
   return [...actions, ...values];
 }
 
+/** One of reconcile()'s changes, in words, for a person reading the delivery. */
+function describe({ command, args }) {
+  const item = args.item ?? args.name;
+
+  switch (command) {
+    case "add_area":
+      return `Adding the area ${args.name}`;
+    case "delete_area":
+      return `Removing the area ${args.area}`;
+    case "add_item":
+      return `Adding ${args.area}: ${args.name}`;
+    case "delete_item":
+      return `Removing ${args.area}: ${args.item}`;
+    default:
+      return `${args.area}: ${item}${squash(args.note) ? " and its note" : ""}`;
+  }
+}
+
 function wanted_areas(ctx) {
   const areas = ctx.job.payload?.areas;
 
@@ -465,9 +485,18 @@ const FILL_AREAS = () => [
   {
     name: "save_items",
     commit: true,
-    /* One change at a time, each sent once, the sheet read again after each. */
+    /*
+     * One change at a time, each sent once, the sheet read again after each.
+     * After a note is written the inspection is loaded afresh before the next
+     * read (1.0.7): on 2026-10-22 Toilet's note showed after its Save and was
+     * gone on reload, so the page as it stands after a press is not what
+     * AppFolio stored. A note lost that way is simply written again — the
+     * reload shows it missing — but the same change made SAME_CHANGE_TRIES
+     * times is something that does not stay, and says so rather than looping.
+     */
     async act(ctx) {
       const wanted = wanted_areas(ctx);
+      const tries = new Map();
       let made = 0;
 
       for (;;) {
@@ -476,8 +505,20 @@ const FILL_AREAS = () => [
         if (!next) break;
         if (++made > MAX_ACTIONS) throw new AdapterError(UNKNOWN_OUTCOME, `Made ${MAX_ACTIONS} changes and AppFolio still differs.`);
 
+        const key = JSON.stringify(next);
+        const tried = (tries.get(key) || 0) + 1;
+
+        if (tried > SAME_CHANGE_TRIES) throw new AdapterError(UNKNOWN_OUTCOME, `${describe(next)} did not stay saved in AppFolio after ${SAME_CHANGE_TRIES} tries.`);
+
+        tries.set(key, tried);
+
         await ctx.ask(next.command, next.args, { once: true, timeout_ms: 60000 });
         await ctx.touch("save_items");
+
+        if (next.command === "set_item" && squash(next.args.note) !== "") {
+          await open_inspection(ctx);
+          await ctx.touch("save_items");
+        }
       }
 
       return { data: { made } };

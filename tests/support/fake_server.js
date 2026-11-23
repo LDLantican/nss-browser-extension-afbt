@@ -390,6 +390,7 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
 
       move(d, decision.to, fields);
       d.last_error = body.error_class;
+      d.last_message = body.message ?? null;
       answer = [200, { delivery_id: d.id, status: decision.to, outcome: body.error_class, note: null }];
     }
 

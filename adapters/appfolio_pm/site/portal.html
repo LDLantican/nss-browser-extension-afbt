@@ -17,13 +17,16 @@
       have AppFolio's paths. ../selectors.v1.js and ../page.js are the adapter's
       page script, exactly as the manifest injects them, and ../page_bridge.js
       the part it injects into the page's own world (on an extension page there
-      is only the one).
+      is only the one). network.js is the pretend server the site's writes go
+      to, loaded before the bridge so the bridge wraps it as it wraps
+      AppFolio's own fetch.
     -->
     <main id="main"></main>
 
     <script type="module" src="site.js"></script>
     <script src="../selectors.v1.js"></script>
     <script src="../page.js"></script>
+    <script src="network.js"></script>
     <script src="../page_bridge.js"></script>
   </body>
 </html>

@@ -14,6 +14,12 @@
  * after the web app's commit, and never asks again. Everything else reads, or
  * types into a form nobody has saved.
  *
+ * None of them answers, or presses the next thing, while AppFolio is still
+ * storing the last: the page shows a switch on before its save has landed,
+ * and on 2026-10-22 a note saved in that gap was undone when the switch's save
+ * arrived after it (Toilet's note on 925). page_bridge.js counts the page's
+ * own writes; `settled()` waits for them to finish.
+ *
  * Items and areas are named by name and occurrence (`area_nth`, `item_nth`),
  * because a house can have two areas both called "Bedroom" and AppFolio's
  * item ids are not ASH's.
@@ -35,6 +41,12 @@
   const SAVE_MS = 20000;
   const DIALOG_MS = 4000;
   const BRIDGE_MS = 1500;
+  /* Stored: nothing the page sent is still unanswered, and nothing new for this long. */
+  const QUIET_MS = 800;
+  /* A press whose save has not even been sent by now sent none. */
+  const SEND_MS = 3000;
+  /* With no bridge to ask, the only wait there is. */
+  const UNWATCHED_MS = 2500;
 
   const fixture = location.protocol === "chrome-extension:";
   const frame = fixture ? new URLSearchParams(location.search).get("frame") : null;
@@ -405,6 +417,50 @@
       return label;
     },
 
+    /** The page's writes now, as page_bridge.js counts them; null with no bridge. Taken before a press. */
+    async watch() {
+      const net = await app.bridge("network");
+
+      return net.ok ? net : null;
+    },
+
+    /**
+     * Wait until AppFolio has stored what the press since `before` sent: a
+     * write has gone out, every write has been answered, and the page has been
+     * quiet for QUIET_MS. A write this site refused is a refusal, not a save.
+     * A press that sent nothing within SEND_MS needed no save. With no bridge
+     * (`before` null) this can only wait a while.
+     */
+    async settled(what, before) {
+      if (!before) {
+        await sleep(UNWATCHED_MS);
+
+        return { watched: false };
+      }
+
+      const since = Date.now();
+
+      for (;;) {
+        const net = await app.bridge("network");
+
+        if (!net.ok) {
+          await sleep(UNWATCHED_MS);
+
+          return { watched: false };
+        }
+
+        if (net.failed > before.failed) throw refuse(`AppFolio did not store ${what} (${net.last_failure}).`, "transient");
+
+        const sent = net.started > before.started;
+
+        if (sent && net.inflight === 0 && net.idle_ms >= QUIET_MS) return { watched: true, sent: true };
+        if (!sent && net.inflight === 0 && Date.now() - since >= SEND_MS) return { watched: true, sent: false };
+        if (Date.now() - since > SAVE_MS) throw refuse(`AppFolio was still storing ${what} after ${SAVE_MS / 1000} s.`, "transient");
+
+        await sleep(150);
+      }
+    },
+
     /** Ask page_bridge.js, in the page's world, to do one thing. No answer is "unavailable". */
     bridge(op, args = {}) {
       const id = crypto.randomUUID();
@@ -546,6 +602,8 @@
 
       app.type(input, name);
 
+      const before = await app.watch();
+
       /*
        * Enter saves the name (read live on 2026-10-22; leaving the field would
        * too, but a background tab's field never has focus to leave, and one
@@ -564,6 +622,7 @@
         `The area "${name}" was not kept.`,
         SAVE_MS,
       );
+      await app.settled(`the area "${name}"`, before);
 
       return { added: name };
     },
@@ -583,12 +642,14 @@
       app.type(field, name);
 
       const where = { area, area_nth, item: name, item_nth: app.count_named({ area, area_nth, item: name }) - 1 };
+      const before = await app.watch();
 
       await app.save(where);
 
       /* Saved, as an area is: the item shows with its Edit button usable, not
          merely the form gone (2026-10-22). */
       await app.until(() => (app.find_li(where)?.querySelector(S.edit)?.disabled === false ? true : null), `The item "${name}" was not kept.`, SAVE_MS);
+      await app.settled(`the item "${name}"`, before);
 
       return { added: name };
     },
@@ -602,6 +663,10 @@
      * again if a press closed it — and must show on the item once saved: the
      * background tab of 2026-10-22 pressed Save, saw the form close and kept no
      * note, and nothing said so.
+     *
+     * Each press is waited for until AppFolio has stored it, not only until the
+     * page shows it (1.0.7): the switch's save is answered before the note is
+     * typed, and the note's before this answers.
      */
     async set_item(args) {
       await app.edit(args);
@@ -614,8 +679,11 @@
 
         if (on() === wanted) continue;
 
+        const before = await app.watch();
+
         app.press(app.item_li(args).querySelector(selector), what);
         await app.until(() => (on() === wanted ? true : null), `${what} on ${args.item} did not ${wanted ? "take" : "come off"}.`, RESULT_MS);
+        await app.settled(`${what} on ${args.item}`, before);
       }
 
       const note = squash(args.note);
@@ -624,7 +692,11 @@
 
       await app.edit(args);
       app.type(app.item_li(args).querySelector(S.notes), args.note ?? "");
+
+      const before = await app.watch();
+
       await app.save(args);
+      await app.settled(`the note on ${args.item}`, before);
       await app
         .until(() => (squash(app.read_item(app.item_li(args)).note) === note ? true : null), `The note on ${args.item} did not take.`, SAVE_MS)
         .catch((error) => {
@@ -638,19 +710,25 @@
       const before = app.count_named(args);
 
       await app.edit(args);
+
+      const watched = await app.watch();
+
       app.press(app.item_li(args).querySelector(S.delete_item), "Delete Item");
       await app.confirm_if_asked();
       await app.until(() => app.count_named(args) < before, `${args.item} was not deleted.`, SAVE_MS);
+      await app.settled(`the deletion of ${args.item}`, watched);
 
       return { deleted: args.item };
     },
 
     async delete_area(args) {
       const before = app.count_areas(args.area);
+      const watched = await app.watch();
 
       app.press(app.card(args).querySelector(S.delete_area), "Delete Area");
       await app.confirm_if_asked();
       await app.until(() => app.count_areas(args.area) < before, `${args.area} was not deleted.`, SAVE_MS);
+      await app.settled(`the deletion of ${args.area}`, watched);
 
       return { deleted: args.area };
     },
@@ -691,7 +769,11 @@
     async save_item(args) {
       if (!app.item_li(args).querySelector(S.notes)) throw refuse("The item's form is not open, so there is nothing to save.", "transient");
 
+      const before = await app.watch();
+
       await app.save(args);
+      /* The photographs go up with the Save: the form closing is not them stored. */
+      await app.settled(`the photographs on ${args.item}`, before);
 
       return { saved: args.item };
     },
@@ -701,8 +783,11 @@
         [...document.querySelectorAll("button")].find((b) => T.mark_done.test(b.textContent.trim()) && !b.closest(".dropdown-menu")) ||
         document.querySelector(S.mark_done);
 
+      const before = await app.watch();
+
       app.press(button, "Mark Inspection Done");
       await app.confirm_if_asked();
+      await app.settled("Mark Inspection Done", before);
 
       return { clicked: true };
     },

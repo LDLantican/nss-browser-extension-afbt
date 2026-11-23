@@ -27,7 +27,7 @@
 
 export default {
   id: "appfolio_pm",
-  version: "1.0.6",
+  version: "1.0.7",
 
   identity: {
     native_id: true,
