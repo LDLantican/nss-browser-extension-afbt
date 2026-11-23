@@ -244,6 +244,24 @@ export function create_chrome_env({ track_tabs = true } = {}) {
          */
         const ticker = tick ? setInterval(() => post({ type: "ASH_PAGE_TICK", tab_id }).catch(() => null), TICK_MS) : null;
 
+        /* What Chrome itself says about the tab: frozen, discarded, loading, behind, its group collapsed (4.1.10). */
+        const tab_facts = async () => {
+          const seen = await chrome.tabs.get(tab_id).catch(() => null);
+
+          if (!seen) return null;
+
+          const grouped = typeof seen.groupId === "number" && seen.groupId >= 0 && chrome.tabGroups;
+          const group = grouped ? await chrome.tabGroups.get(seen.groupId).catch(() => null) : null;
+
+          return {
+            frozen: typeof seen.frozen === "boolean" ? seen.frozen : null,
+            discarded: Boolean(seen.discarded),
+            status: seen.status ?? null,
+            active: Boolean(seen.active),
+            group_collapsed: group ? Boolean(group.collapsed) : null,
+          };
+        };
+
         /* Asked once a page has gone quiet: answered at once by a page script that is running at all. */
         const check = async () => {
           try {
@@ -300,7 +318,7 @@ export function create_chrome_env({ track_tabs = true } = {}) {
             if (once && !unreached)
               throw new AdapterError(
                 UNKNOWN_OUTCOME,
-                `The page did not confirm "${command}" (${where}), so nobody knows whether it happened${silent ? explain_silence(await check(), command) : ""}.`,
+                `The page did not confirm "${command}" (${where}), so nobody knows whether it happened${silent ? explain_silence(await check(), command, await tab_facts()) : ""}.`,
               );
 
             /* Two different failures, told apart so the next one says which: no
@@ -309,7 +327,7 @@ export function create_chrome_env({ track_tabs = true } = {}) {
             if (silent)
               throw new AdapterError(
                 TRANSIENT,
-                `The page took "${command}" and did not answer within ${Math.round(timeout_ms / 1000)} s (${where})${explain_silence(await check(), command)}.`,
+                `The page took "${command}" and did not answer within ${Math.round(timeout_ms / 1000)} s (${where})${explain_silence(await check(), command, await tab_facts())}.`,
               );
 
             if (Date.now() > until)

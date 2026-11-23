@@ -32,6 +32,21 @@ export default {
     t.ok(/main thread is busy/.test(explain_silence(BUSY, "sheet")));
   },
 
+  "Chrome's own word on the tab is added: frozen or not, in front or behind, its group open or collapsed"(t) {
+    const frozen = { frozen: true, discarded: false, status: "complete", active: false, group_collapsed: true };
+
+    t.equal(
+      explain_silence(BUSY, "find_in_list", frozen),
+      ", and did not answer a status check either: its main thread is busy, or Chrome has frozen it (Chrome reports the tab frozen, it was a background tab, in a collapsed group)",
+    );
+    t.equal(
+      explain_silence(DIAG, "attach_photos", { frozen: false, discarded: false, status: "loading", active: false, group_collapsed: false }).split("; ").at(-1),
+      "Chrome reports the tab not frozen, it was still loading, it was a background tab, in an open group",
+    );
+    /* An older Chrome has no frozen flag: nothing is claimed either way. */
+    t.equal(explain_silence(null, "sheet", { frozen: null, discarded: false, status: "complete", active: true, group_collapsed: null }), ": it was the tab in front");
+  },
+
   "a page with no status check, and one whose timers ran on time, add only what is known"(t) {
     t.equal(explain_silence(null, "sheet"), "");
     t.equal(
