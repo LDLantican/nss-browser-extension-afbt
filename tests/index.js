@@ -16,6 +16,7 @@ const FILES = [
   "worker/import_test.js",
   "worker/kill_loop_test.js",
   "worker/runtime_test.js",
+  "worker/silence_test.js",
 ];
 
 document.addEventListener("DOMContentLoaded", () => {

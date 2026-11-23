@@ -76,20 +76,24 @@
 
   /* Every nap waiting to be woken. */
   const nappers = new Set();
-  const wake = () => {
-    for (const check of [...nappers]) check();
+  const wake = (why) => {
+    for (const check of [...nappers]) check(why);
   };
 
   /**
    * Wait at least `ms`, as setTimeout would, but finish at the first moment
-   * that is known: the timer, a change to the page, or a tick from the worker.
+   * that is known: the timer, or a tick from the worker once the time is up.
    * A hidden tab's slowed timer alone never holds a command past its time.
+   *
+   * `poll`: the wait is only a pause between two looks at the page, so any
+   * change to the page ends it at once — a form that opened in 50 ms is looked
+   * at then, not after the timer (the test page, 2026-11-24).
    */
-  const nap = (ms) =>
+  const nap = (ms, { poll = false } = {}) =>
     new Promise((resolve) => {
       const at = Date.now() + ms;
-      const check = () => {
-        if (Date.now() < at) return;
+      const check = (why) => {
+        if (Date.now() < at && !(poll && why === "change")) return;
 
         nappers.delete(check);
         clearTimeout(timer);
@@ -114,7 +118,7 @@
     /** Start keeping note of the page: changes wake naps; timers and long tasks are measured. */
     watch_page() {
       new MutationObserver(() => {
-        if (nappers.size) wake();
+        if (nappers.size) wake("change");
       }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
 
       /* A chain of timeouts, not an interval, so it is slowed exactly as the page's waits were.
@@ -152,7 +156,7 @@
       /* The worker's tick while it waits: a chance for every nap to see its time has come. */
       if (message?.type === "ASH_PAGE_TICK") {
         watch.ticks++;
-        wake();
+        wake("tick");
 
         return false;
       }
@@ -296,7 +300,7 @@
         if (Date.now() > until) throw refuse(`The ${app.kind()} page did not finish loading.`, "transient");
 
         app.stage(`waiting for the ${app.kind()} page to render`);
-        await nap(200);
+        await nap(200, { poll: true });
       }
     },
 
@@ -1004,7 +1008,7 @@
         if (seen) return seen;
         if (Date.now() > until) throw refuse(message, "transient");
 
-        await nap(150);
+        await nap(150, { poll: true });
       }
     },
 

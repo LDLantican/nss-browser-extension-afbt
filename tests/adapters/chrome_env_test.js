@@ -76,7 +76,7 @@ export default {
 
       t.ok(refused, "a slowed page answered without ticks, so the first half proves nothing");
       t.equal(refused?.error_class, "transient");
-      t.ok(/it was at "waiting for AppFolio to store/.test(refused?.message || ""), `the wait was not named: ${refused?.message}`);
+      t.ok(/it was at "waiting for [^"]+" for \d/.test(refused?.message || ""), `the wait was not named: ${refused?.message}`);
       t.ok(/its timers ran up to \d/.test(refused?.message || ""), `the slowed timers were not reported: ${refused?.message}`);
     } finally {
       await p.done();
@@ -102,31 +102,6 @@ export default {
       t.ok(/the page was hidden/.test(refused?.message || ""), `the page's visibility was not said: ${refused?.message}`);
     } finally {
       await p.done();
-    }
-  },
-
-  async "a page whose main thread is held says so, because even its status check goes unanswered"(t) {
-    const env = create_chrome_env({ track_tabs: false });
-    const tab = await chrome.tabs.create({ url: chrome.runtime.getURL("tests/support/busy_page.html"), active: false });
-
-    try {
-      await pause(800);
-
-      const started = Date.now();
-      let refused = null;
-
-      try {
-        await env.page.send(tab.id, "sheet", {}, { timeout_ms: 1500 });
-      } catch (error) {
-        refused = error;
-      }
-
-      t.equal(refused?.error_class, "transient", `ended ${refused?.error_class}: ${refused?.message}`);
-      t.ok(/did not answer a status check either: its main thread is busy/.test(refused?.message || ""), `said: ${refused?.message}`);
-      t.ok(Date.now() - started < 6000, `waited ${Date.now() - started} ms`);
-    } finally {
-      await pause(4000);
-      await chrome.tabs.remove(tab.id).catch(() => null);
     }
   },
 
