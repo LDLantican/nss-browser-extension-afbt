@@ -149,6 +149,8 @@ export default {
     /* Untracked, so a worker signed in on this browser cannot close its tab as a stray (the test page, 2026-11-24). */
     const chrome_env = create_chrome_env({ track_tabs: false });
     const opened = [];
+    /* Whether each tab's group was collapsed when it opened: a collapsed group's tabs are frozen (4.1.11). */
+    const collapsed = [];
     const env = {
       ...fake,
       extension_url: chrome_env.extension_url,
@@ -157,8 +159,10 @@ export default {
         ...chrome_env.tabs,
         async open(url) {
           const id = await chrome_env.tabs.open(url);
+          const tab = await chrome.tabs.get(id).catch(() => null);
 
           opened.push(id);
+          if (tab && tab.groupId >= 0) collapsed.push((await chrome.tabGroups.get(tab.groupId)).collapsed);
 
           return id;
         },
@@ -182,6 +186,7 @@ export default {
 
       t.equal(delivery.status, "succeeded", `ended ${delivery.status}: ${JSON.stringify(await runtime.state())}`);
       t.equal(opened.length, 1, "more than one tab was opened");
+      t.equal(collapsed.includes(true), false, "the job's tab was put in a collapsed group, whose tabs Chrome freezes");
       t.equal(await chrome.tabs.get(opened[0]).then(() => true, () => false), false, "the job's tab was left open");
 
       const books = (await chrome.storage.local.get(SITE_KEY))[SITE_KEY];

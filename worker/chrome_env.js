@@ -17,10 +17,15 @@
  *
  * ## The "ASH" tab group
  *
- * A job runs in a background tab, gathered into one collapsed tab group named
- * ASH, so a desk that works the queue all day collects one quiet chip rather
- * than a row of tabs — and not a minimized window, which can stall a page's
- * rendering. Every tab opened here is written down in `storage.session` the
+ * A job runs in a background tab, gathered into one tab group named ASH, so a
+ * desk that works the queue all day collects one group rather than a row of
+ * loose tabs — and not a minimized window, which can stall a page's rendering.
+ *
+ * The group is **never collapsed** (4.1.11). Chrome freezes the tabs of a
+ * collapsed group: on 2026-11-24 the inspection list went silent seven times
+ * in the worker's tab, and Chrome's own word on it was "frozen, a background
+ * tab, in a collapsed group". So the group is made open, opened again if a
+ * person collapses it, and checked before every command a page is sent. Every tab opened here is written down in `storage.session` the
  * moment it exists, so a worker that died holding one closes it at the next
  * tick (close_strays) unless the job in hand still needs it.
  */
@@ -83,10 +88,27 @@ async function wait_loaded(tab_id, timeout = LOAD_TIMEOUT_MS) {
 }
 
 /**
- * Put a tab in the collapsed ASH group, making the group if this window has
- * none. Best effort: a browser without tab groups still works the job, in a
- * plain background tab.
+ * Put a tab in the ASH group, making the group if this window has none, and
+ * leave the group open: a collapsed group's tabs are frozen. Best effort: a
+ * browser without tab groups still works the job, in a plain background tab.
  */
+/** Open the tab's group if it is collapsed, so Chrome does not freeze the tab. Best effort. */
+async function keep_open(tab_id) {
+  if (!chrome.tabGroups) return;
+
+  try {
+    const tab = await chrome.tabs.get(tab_id);
+
+    if (typeof tab.groupId !== "number" || tab.groupId < 0) return;
+
+    const group = await chrome.tabGroups.get(tab.groupId);
+
+    if (group.collapsed) await chrome.tabGroups.update(group.id, { collapsed: false });
+  } catch {
+    /* Tidiness again: a page that is frozen anyway says so when it goes silent. */
+  }
+}
+
 async function group(tab_id) {
   if (!chrome.tabGroups || !chrome.tabs.group) return;
 
@@ -97,13 +119,14 @@ async function group(tab_id) {
 
     if (existing && existing.windowId === tab.windowId) {
       await chrome.tabs.group({ groupId: existing.id, tabIds: [tab_id] });
+      await keep_open(tab_id);
 
       return;
     }
 
     const id = await chrome.tabs.group({ tabIds: [tab_id], createProperties: { windowId: tab.windowId } });
 
-    await chrome.tabGroups.update(id, { title: GROUP_TITLE, collapsed: true, color: "grey" });
+    await chrome.tabGroups.update(id, { title: GROUP_TITLE, collapsed: false, color: "grey" });
     await chrome.storage.session.set({ [GROUP_KEY]: id });
   } catch {
     /* A tab group is tidiness, never a reason to fail a job. */
@@ -190,7 +213,7 @@ export function create_chrome_env({ track_tabs = true } = {}) {
         return opened.map((tab) => ({ id: tab.id, url: tab.pendingUrl || tab.url || null }));
       },
 
-      /** Hand the tab to a person: out of the collapsed group, in front, and said so. */
+      /** Hand the tab to a person: out of the group, in front, and said so. */
       async reveal(tab_id, message) {
         try {
           const tab = await chrome.tabs.get(tab_id);
@@ -271,6 +294,9 @@ export function create_chrome_env({ track_tabs = true } = {}) {
             return null;
           }
         };
+
+        /* A person may have collapsed the group since the tab was opened, and a collapsed group's tabs freeze. */
+        await keep_open(tab_id);
 
         try {
           for (;;) {

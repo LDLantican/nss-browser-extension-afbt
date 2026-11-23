@@ -487,7 +487,7 @@ function context(rt, job) {
     extension_url: (path) => rt.env.extension_url(path),
 
     /**
-     * Show `url` in this job's tab, opening one in the collapsed "ASH" group
+     * Show `url` in this job's tab, opening one in the "ASH" group
      * if it has none. The tab survives a service worker restart, so a resumed
      * job reuses it.
      */
