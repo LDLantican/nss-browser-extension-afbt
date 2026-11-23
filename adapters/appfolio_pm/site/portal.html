@@ -19,11 +19,13 @@
       the part it injects into the page's own world (on an extension page there
       is only the one). network.js is the pretend server the site's writes go
       to, loaded before the bridge so the bridge wraps it as it wraps
-      AppFolio's own fetch.
+      AppFolio's own fetch. timers.js, first of all, slows the page's timers when
+      asked (`?slow_timers=`), as a hidden tab's are.
     -->
     <main id="main"></main>
 
     <script type="module" src="site.js"></script>
+    <script src="timers.js"></script>
     <script src="../selectors.v1.js"></script>
     <script src="../page.js"></script>
     <script src="network.js"></script>

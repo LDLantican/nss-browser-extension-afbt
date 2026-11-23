@@ -19,7 +19,9 @@
     if (url.origin !== location.origin || url.pathname !== PATH) return native.apply(this, arguments);
 
     const delay = Math.max(0, Number(url.searchParams.get("delay") || 0));
+    /* The server's clock, never slowed by timers.js. */
+    const later = window.ash_native_set_timeout || setTimeout;
 
-    return new Promise((resolve) => setTimeout(() => resolve(new Response("{}", { status: 200 })), delay));
+    return new Promise((resolve) => later(() => resolve(new Response("{}", { status: 200 })), delay));
   };
 })();

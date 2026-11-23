@@ -20,6 +20,16 @@
  * arrived after it (Toilet's note on 925). page_bridge.js counts the page's
  * own writes; `settled()` waits for them to finish.
  *
+ * Nothing here waits on the page's timers alone (1.0.8). In the worker's
+ * hidden tab, on 2026-11-24, commands went unanswered for 30 s while Chrome
+ * called the tab active, not frozen, and the same steps took seconds with the
+ * tab in front. A hidden page's timers are slowed, and every wait here was a
+ * chain of them. So a wait (`nap()`) ends on whichever comes first: its timer,
+ * a change to the page, or a tick the worker sends while it waits for an
+ * answer, which no hidden tab slows. And the page keeps note of where each
+ * command is and how late its timers run, which it answers at once when the
+ * worker asks (`ASH_PAGE_DIAG`), so a page that still goes quiet says why.
+ *
  * Items and areas are named by name and occurrence (`area_nth`, `item_nth`),
  * because a house can have two areas both called "Bedroom" and AppFolio's
  * item ids are not ASH's.
@@ -48,10 +58,47 @@
   /* With no bridge to ask, the only wait there is. */
   const UNWATCHED_MS = 2500;
 
+  /* How often the page checks its own timers run on time. */
+  const LAG_EVERY_MS = 1000;
+  /* How far back the status check looks. */
+  const RECENT_MS = 60000;
+
   const fixture = location.protocol === "chrome-extension:";
   const frame = fixture ? new URLSearchParams(location.search).get("frame") : null;
 
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  /*
+   * What the page knows about itself, for the status check: the commands in
+   * hand and the wait each is in, how late its timers have run, the long tasks
+   * that held its main thread, and whether Chrome froze it.
+   */
+  const watch = { active: new Set(), current: null, ticks: 0, freezes: 0, resumes: 0, lags: [], long_tasks: [], last_lag_at: null };
+  const recent = (list) => list.filter((entry) => Date.now() - entry.at <= RECENT_MS);
+
+  /* Every nap waiting to be woken. */
+  const nappers = new Set();
+  const wake = () => {
+    for (const check of [...nappers]) check();
+  };
+
+  /**
+   * Wait at least `ms`, as setTimeout would, but finish at the first moment
+   * that is known: the timer, a change to the page, or a tick from the worker.
+   * A hidden tab's slowed timer alone never holds a command past its time.
+   */
+  const nap = (ms) =>
+    new Promise((resolve) => {
+      const at = Date.now() + ms;
+      const check = () => {
+        if (Date.now() < at) return;
+
+        nappers.delete(check);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(check, ms);
+
+      nappers.add(check);
+    });
   const refuse = (message, error_class = "adapter_broken") => Object.assign(new Error(message), { error_class });
   /* As adapter.js compares notes: spacing and zero-width spaces do not count. */
   const squash = (text) => String(text ?? "").replace(/[ ​]/g, " ").replace(/\s+/g, " ").trim();
@@ -61,19 +108,106 @@
 
     init() {
       chrome.runtime.onMessage.addListener(app.on_message);
+      app.watch_page();
+    },
+
+    /** Start keeping note of the page: changes wake naps; timers and long tasks are measured. */
+    watch_page() {
+      new MutationObserver(() => {
+        if (nappers.size) wake();
+      }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+
+      /* A chain of timeouts, not an interval, so it is slowed exactly as the page's waits were.
+         Counted from now, so a first measurement that never comes is lag too. */
+      watch.last_lag_at = Date.now();
+
+      const measure = (expected) => {
+        const now = Date.now();
+
+        watch.lags = recent([...watch.lags, { at: now, ms: Math.max(0, now - expected) }]).slice(-120);
+        watch.last_lag_at = now;
+        setTimeout(() => measure(Date.now() + LAG_EVERY_MS), LAG_EVERY_MS);
+      };
+
+      setTimeout(() => measure(Date.now() + LAG_EVERY_MS), LAG_EVERY_MS);
+
+      try {
+        new PerformanceObserver((list) => {
+          const now = Date.now();
+
+          watch.long_tasks = recent([...watch.long_tasks, ...list.getEntries().map((entry) => ({ at: now, ms: Math.round(entry.duration) }))]).slice(-200);
+        }).observe({ type: "longtask", buffered: true });
+      } catch {
+        /* No long-task timing here: the status check says nothing about it. */
+      }
+
+      document.addEventListener("freeze", () => watch.freezes++);
+      document.addEventListener("resume", () => watch.resumes++);
     },
 
     on_message(message, sender, respond) {
-      if (message?.type !== "ASH_PAGE_COMMAND") return false;
       if (sender?.id !== chrome.runtime.id) return false;
-      if (fixture && (message.frame ?? null) !== frame) return false;
+      if (fixture && (message?.frame ?? null) !== frame) return false;
+
+      /* The worker's tick while it waits: a chance for every nap to see its time has come. */
+      if (message?.type === "ASH_PAGE_TICK") {
+        watch.ticks++;
+        wake();
+
+        return false;
+      }
+
+      /* Answered here and now, never after a wait: a page that cannot answer this is a busy page. */
+      if (message?.type === "ASH_PAGE_DIAG") {
+        respond(app.diagnose());
+
+        return false;
+      }
+
+      if (message?.type !== "ASH_PAGE_COMMAND") return false;
+
+      const entry = { command: String(message.command), since: Date.now(), stage: "starting", stage_at: Date.now() };
+
+      watch.active.add(entry);
+      watch.current = entry;
 
       app
         .handle(message.command, message.args || {})
         .then((result) => respond({ ok: true, result }))
-        .catch((error) => respond({ ok: false, error: error?.message || String(error), error_class: error?.error_class || "adapter_broken" }));
+        .catch((error) => respond({ ok: false, error: error?.message || String(error), error_class: error?.error_class || "adapter_broken" }))
+        .finally(() => {
+          watch.active.delete(entry);
+          if (watch.current === entry) watch.current = [...watch.active].at(-1) ?? null;
+        });
 
       return true;
+    },
+
+    /** Name the wait the command in hand is in, for the status check. */
+    stage(text) {
+      if (!watch.current) return;
+
+      watch.current.stage = text;
+      watch.current.stage_at = Date.now();
+    },
+
+    /** The status check: where each command is, and how the page's timers and main thread have fared. */
+    diagnose() {
+      const now = Date.now();
+      const lags = recent(watch.lags).map((entry) => entry.ms);
+      /* A measurement that is overdue right now is lag too, and the likeliest kind. */
+      const overdue = watch.last_lag_at === null ? 0 : Math.max(0, now - watch.last_lag_at - LAG_EVERY_MS);
+      const long_tasks = recent(watch.long_tasks);
+
+      return {
+        visibility: document.visibilityState,
+        active: [...watch.active].map((entry) => ({ command: entry.command, for_ms: now - entry.since, stage: entry.stage, stage_for_ms: now - entry.stage_at })),
+        worst_timer_lag_ms: Math.max(0, overdue, ...lags),
+        long_tasks: { count: long_tasks.length, total_ms: long_tasks.reduce((sum, entry) => sum + entry.ms, 0) },
+        freezes: watch.freezes,
+        resumes: watch.resumes,
+        ticks: watch.ticks,
+      };
     },
 
     async handle(command, args) {
@@ -161,7 +295,8 @@
         if (app.signed_out()) return;
         if (Date.now() > until) throw refuse(`The ${app.kind()} page did not finish loading.`, "transient");
 
-        await sleep(200);
+        app.stage(`waiting for the ${app.kind()} page to render`);
+        await nap(200);
       }
     },
 
@@ -259,8 +394,10 @@
       let quiet = 0;
       let last = before;
 
+      app.stage("waiting for the filtered list to settle");
+
       while (Date.now() < until) {
-        await sleep(250);
+        await nap(250);
 
         const now = app.rows().map((r) => r.textContent).join("|");
 
@@ -432,8 +569,10 @@
      * (`before` null) this can only wait a while.
      */
     async settled(what, before) {
+      app.stage(`waiting for AppFolio to store ${what}`);
+
       if (!before) {
-        await sleep(UNWATCHED_MS);
+        await nap(UNWATCHED_MS);
 
         return { watched: false };
       }
@@ -444,7 +583,7 @@
         const net = await app.bridge("network");
 
         if (!net.ok) {
-          await sleep(UNWATCHED_MS);
+          await nap(UNWATCHED_MS);
 
           return { watched: false };
         }
@@ -457,7 +596,7 @@
         if (!sent && net.inflight === 0 && Date.now() - since >= SEND_MS) return { watched: true, sent: false };
         if (Date.now() - since > SAVE_MS) throw refuse(`AppFolio was still storing ${what} after ${SAVE_MS / 1000} s.`, "transient");
 
-        await sleep(150);
+        await nap(150);
       }
     },
 
@@ -466,6 +605,7 @@
       const id = crypto.randomUUID();
 
       return new Promise((resolve) => {
+        let finished = false;
         const done = (event) => {
           let reply;
 
@@ -475,16 +615,20 @@
             return;
           }
 
-          if (reply?.id !== id) return;
+          if (reply?.id !== id || finished) return;
 
-          clearTimeout(timer);
+          finished = true;
           document.removeEventListener("ash:bridge:done", done);
           resolve(reply);
         };
-        const timer = setTimeout(() => {
+
+        nap(BRIDGE_MS).then(() => {
+          if (finished) return;
+
+          finished = true;
           document.removeEventListener("ash:bridge:done", done);
           resolve({ ok: false, reason: "unavailable" });
-        }, BRIDGE_MS);
+        });
 
         document.addEventListener("ash:bridge:done", done);
         document.dispatchEvent(new CustomEvent("ash:bridge", { detail: JSON.stringify({ id, op, ...args }) }));
@@ -564,7 +708,12 @@
 
       if (!li.querySelector(S.notes)) app.press(li.querySelector(S.edit), "Edit");
 
-      return app.until(() => (app.find_li(args)?.querySelector(S.notes) ? app.find_li(args) : null), "The item's edit form did not open.", RESULT_MS);
+      return app.until(
+        () => (app.find_li(args)?.querySelector(S.notes) ? app.find_li(args) : null),
+        "The item's edit form did not open.",
+        RESULT_MS,
+        `waiting for ${args.item}'s form to open`,
+      );
     },
 
     /** Press Save on an open item form, and wait for the form to close. */
@@ -575,7 +724,7 @@
         const li = app.find_li(args);
 
         return li && !li.querySelector(S.notes) ? li : null;
-      }, `Save on ${args.item} did not finish.`, SAVE_MS);
+      }, `Save on ${args.item} did not finish.`, SAVE_MS, `waiting for Save on ${args.item} to close its form`);
     },
 
     /** How many items of this name the area has: what a deletion is seen by. */
@@ -761,7 +910,8 @@
       input.dispatchEvent(new Event("change", { bubbles: true }));
       app.staged = [];
 
-      await sleep(500);
+      app.stage(`letting the page take the photographs on ${args.item}`);
+      await nap(500);
 
       return { attached: input.files.length === wanted ? wanted : input.files.length };
     },
@@ -796,6 +946,8 @@
     async confirm_if_asked() {
       const until = Date.now() + DIALOG_MS;
 
+      app.stage("looking for a confirmation dialog");
+
       while (Date.now() < until) {
         const dialog = document.querySelector(S.dialog);
         const yes = dialog && ([...dialog.querySelectorAll("button")].find((b) => T.confirm.test(b.textContent.trim())) || dialog.querySelector(S.dialog_confirm));
@@ -806,7 +958,7 @@
           return true;
         }
 
-        await sleep(150);
+        await nap(150);
       }
 
       return false;
@@ -840,8 +992,11 @@
       return { clicked: true };
     },
 
-    async until(look, message, timeout = READY_MS) {
+    /** Wait until `look` sees something; `stage` names the wait for the status check. */
+    async until(look, message, timeout = READY_MS, stage = null) {
       const until = Date.now() + timeout;
+
+      app.stage(stage || `waiting (it gives up with "${message}")`);
 
       for (;;) {
         const seen = look();
@@ -849,7 +1004,7 @@
         if (seen) return seen;
         if (Date.now() > until) throw refuse(message, "transient");
 
-        await sleep(150);
+        await nap(150);
       }
     },
 

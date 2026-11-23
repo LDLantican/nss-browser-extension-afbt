@@ -300,6 +300,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         case "edit": {
           const books = await app.load();
+
+          /* `freeze_forms`: Edit does nothing, so a wait for the form never ends (the status check's test). */
+          if (books.freeze_forms) return undefined;
           const item = by_id(books, here.id).areas.flatMap((a) => a.items).find((i) => i.id === control.dataset.item);
 
           app.editing = { item_id: item.id, name: item.name, result: item.result, note: item.note, files: 0 };

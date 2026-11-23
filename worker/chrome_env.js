@@ -36,6 +36,10 @@ const GROUP_TITLE = "ASH";
 const FETCH_TIMEOUT_MS = 20000;
 const LOAD_TIMEOUT_MS = 30000;
 const PAGE_TIMEOUT_MS = 30000;
+/* How often a page is ticked while its answer is awaited (see page.send). */
+const TICK_MS = 250;
+/* How long a silent page is given to answer the status check. */
+const DIAG_MS = 2000;
 
 function storage(area) {
   return {
@@ -50,6 +54,29 @@ function storage(area) {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const seconds = (ms) => String(Math.round(Number(ms || 0) / 100) / 10);
+
+/**
+ * A silent page's status check, in words, to put after "did not answer": where
+ * the command was, whether the page was hidden, how late its timers ran, how
+ * long its main thread was held, and whether Chrome froze it. Exported for the
+ * tests.
+ */
+export function explain_silence(diag, command) {
+  if (diag === "busy") return ", and did not answer a status check either: its main thread is busy, or Chrome has frozen it";
+  if (!diag || typeof diag !== "object") return "";
+
+  const parts = [];
+  const mine = (diag.active || []).find((entry) => entry.command === command) || (diag.active || [])[0];
+
+  parts.push(mine ? `it was at "${mine.stage}" for ${seconds(mine.stage_for_ms)} s` : "it had finished every command, so the answer was lost on the way");
+  parts.push(`the page was ${diag.visibility || "of unknown visibility"}`);
+  parts.push(diag.worst_timer_lag_ms >= 1000 ? `its timers ran up to ${seconds(diag.worst_timer_lag_ms)} s late` : "its timers were on time");
+  if (diag.long_tasks?.count) parts.push(`long tasks held it for ${seconds(diag.long_tasks.total_ms)} s of the last minute`);
+  if (diag.freezes) parts.push(`Chrome froze it ${diag.freezes} times`);
+
+  return `: ${parts.join("; ")}`;
+}
 
 async function remember_tab(tab_id) {
   const { [TABS_KEY]: tabs = [] } = await chrome.storage.session.get(TABS_KEY);
@@ -105,7 +132,12 @@ async function group(tab_id) {
   }
 }
 
-export function create_chrome_env() {
+/**
+ * `track_tabs: false` keeps the tabs it opens out of the record close_strays
+ * reads, so a test page's tabs are never closed by the live worker running in
+ * the same browser (chrome_env_test, 2026-11-24).
+ */
+export function create_chrome_env({ track_tabs = true } = {}) {
   return {
     version: chrome.runtime.getManifest().version || "",
 
@@ -140,7 +172,7 @@ export function create_chrome_env() {
 
         if (!tab?.id) return null;
 
-        await remember_tab(tab.id);
+        if (track_tabs) await remember_tab(tab.id);
         await group(tab.id);
         await wait_loaded(tab.id);
 
@@ -175,7 +207,7 @@ export function create_chrome_env() {
         const tabs = await chrome.tabs.query({}).catch(() => []);
         const opened = tabs.filter((tab) => tab.openerTabId === tab_id);
 
-        for (const tab of opened) await remember_tab(tab.id);
+        if (track_tabs) for (const tab of opened) await remember_tab(tab.id);
 
         return opened.map((tab) => ({ id: tab.id, url: tab.pendingUrl || tab.url || null }));
       },
@@ -217,72 +249,103 @@ export function create_chrome_env() {
        * exactly like a page that never heard, and asking twice is the double
        * invoice. That case is an unknown outcome, which verification settles.
        */
-      async send(tab_id, command, args = {}, { once = false, timeout_ms = PAGE_TIMEOUT_MS } = {}) {
+      async send(tab_id, command, args = {}, { once = false, timeout_ms = PAGE_TIMEOUT_MS, tick = true } = {}) {
         const until = Date.now() + timeout_ms;
         const message = { type: "ASH_PAGE_COMMAND", tab_id, command, args };
         const own_pages = chrome.runtime.getURL("");
+        let own = false;
+        /* An extension page in a tab (the fixture site) hears runtime messages; a content script on a real portal hears tab messages. */
+        const post = (body) => (own ? chrome.runtime.sendMessage(body) : chrome.tabs.sendMessage(tab_id, body));
 
-        for (;;) {
-          const tab = await chrome.tabs.get(tab_id).catch(() => null);
+        /*
+         * While the answer is awaited, the page is ticked. A hidden tab's timers
+         * are slowed — on 2026-11-24 AppFolio's inspection page went unanswered
+         * for 30 s in an active, unfrozen background tab — but every tick is a
+         * message the page handles at once, and it wakes the page script's
+         * waits (page.js, nap()). Nobody answers a tick.
+         */
+        const ticker = tick ? setInterval(() => post({ type: "ASH_PAGE_TICK", tab_id }).catch(() => null), TICK_MS) : null;
 
-          if (!tab) throw new TabGone();
-
-          let answer;
-          let unreached = false;
-          let silent = false;
-
+        /* Asked once a page has gone quiet: answered at once by a page script that is running at all. */
+        const check = async () => {
           try {
-            /* An extension page in a tab (the fixture site) hears runtime
-               messages; a content script on a real portal hears tab messages. */
-            const sent = String(tab.url || "").startsWith(own_pages)
-              ? chrome.runtime.sendMessage(message)
-              : chrome.tabs.sendMessage(tab_id, message);
-
-            /*
-             * A page that takes the message and never answers would hold this
-             * await for ever — until Chrome stops the service worker, minutes
-             * later, with the lease long gone and nothing reported (the fill
-             * on AppFolio inspection 925, 2026-10-22). So one wait is never
-             * longer than the time this command has left.
-             */
-            answer = await Promise.race([
-              sent,
-              sleep(Math.max(1000, until - Date.now())).then(() => {
-                silent = true;
-
-                return undefined;
-              }),
-            ]);
-          } catch (error) {
-            unreached = /Receiving end does not exist/i.test(String(error?.message || ""));
-            answer = undefined;
+            return await Promise.race([post({ type: "ASH_PAGE_DIAG", tab_id }), sleep(DIAG_MS).then(() => "busy")]);
+          } catch {
+            /* Nobody on the page takes status checks (the vendor portal, the fixture): nothing to add. */
+            return null;
           }
+        };
 
-          if (answer && typeof answer === "object") {
-            if (answer.ok) return answer.result;
+        try {
+          for (;;) {
+            const tab = await chrome.tabs.get(tab_id).catch(() => null);
 
-            throw new AdapterError(answer.error_class || "adapter_broken", answer.error || `The page refused "${command}".`);
+            if (!tab) throw new TabGone();
+
+            own = String(tab.url || "").startsWith(own_pages);
+
+            let answer;
+            let unreached = false;
+            let silent = false;
+
+            try {
+              const sent = post(message);
+
+              /*
+               * A page that takes the message and never answers would hold this
+               * await for ever — until Chrome stops the service worker, minutes
+               * later, with the lease long gone and nothing reported (the fill
+               * on AppFolio inspection 925, 2026-10-22). So one wait is never
+               * longer than the time this command has left.
+               */
+              answer = await Promise.race([
+                sent,
+                sleep(Math.max(1000, until - Date.now())).then(() => {
+                  silent = true;
+
+                  return undefined;
+                }),
+              ]);
+            } catch (error) {
+              unreached = /Receiving end does not exist/i.test(String(error?.message || ""));
+              answer = undefined;
+            }
+
+            if (answer && typeof answer === "object") {
+              if (answer.ok) return answer.result;
+
+              throw new AdapterError(answer.error_class || "adapter_broken", answer.error || `The page refused "${command}".`);
+            }
+
+            const where = String(tab.url || "").replace(/[?#].*$/, "");
+
+            if (once && !unreached)
+              throw new AdapterError(
+                UNKNOWN_OUTCOME,
+                `The page did not confirm "${command}" (${where}), so nobody knows whether it happened${silent ? explain_silence(await check(), command) : ""}.`,
+              );
+
+            /* Two different failures, told apart so the next one says which: no
+               ASH script on the page to hear it, or one that heard and went quiet —
+               which is asked where it is stuck. */
+            if (silent)
+              throw new AdapterError(
+                TRANSIENT,
+                `The page took "${command}" and did not answer within ${Math.round(timeout_ms / 1000)} s (${where})${explain_silence(await check(), command)}.`,
+              );
+
+            if (Date.now() > until)
+              throw new AdapterError(
+                TRANSIENT,
+                unreached
+                  ? `No ASH script on the page heard "${command}" within ${Math.round(timeout_ms / 1000)} s (${where}).`
+                  : `The page did not answer "${command}" within ${Math.round(timeout_ms / 1000)} s (${where}).`,
+              );
+
+            await sleep(250);
           }
-
-          const where = String(tab.url || "").replace(/[?#].*$/, "");
-
-          if (once && !unreached)
-            throw new AdapterError(UNKNOWN_OUTCOME, `The page did not confirm "${command}" (${where}), so nobody knows whether it happened.`);
-
-          /* Two different failures, told apart so the next one says which: no
-             ASH script on the page to hear it, or one that heard and went quiet. */
-          if (silent)
-            throw new AdapterError(TRANSIENT, `The page took "${command}" and did not answer within ${Math.round(timeout_ms / 1000)} s (${where}).`);
-
-          if (Date.now() > until)
-            throw new AdapterError(
-              TRANSIENT,
-              unreached
-                ? `No ASH script on the page heard "${command}" within ${Math.round(timeout_ms / 1000)} s (${where}).`
-                : `The page did not answer "${command}" within ${Math.round(timeout_ms / 1000)} s (${where}).`,
-            );
-
-          await sleep(250);
+        } finally {
+          if (ticker !== null) clearInterval(ticker);
         }
       },
     },
