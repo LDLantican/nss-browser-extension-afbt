@@ -1,6 +1,6 @@
 /**
  * Importing work orders from a property manager's AppFolio into the web app
- * (roadmap phase 8; the web app's docs/worker-api.md, "Importing").
+ * (roadmap phase 8; the web app's docs/reference/worker-api.md, "Importing").
  *
  * The person ticks rows on Camelot's AppFolio work-order list. The content
  * script reads them there, because only a content script can read AppFolio

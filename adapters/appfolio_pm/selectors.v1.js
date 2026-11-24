@@ -4,7 +4,7 @@
  * version in manifest.js, which is what lets the web app kill one version.
  *
  * Read off Camelot's AppFolio on 2026-10-20, structure only, on a throwaway
- * inspection nothing was saved to (docs/pm-adapter.md). Three different pages:
+ * inspection nothing was saved to (docs/reference/pm-adapter.md). Three different pages:
  *
  *   the list         /maintenance/inspections — a React table whose rows have
  *                    no links (a click opens the inspection in a new tab), and

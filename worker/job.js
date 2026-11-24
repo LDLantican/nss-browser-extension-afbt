@@ -18,7 +18,7 @@
  *
  *   commit_requested  about to ask the server's permission. Asking again is
  *                     safe: a holder that is already committing gets the same
- *                     yes (docs/worker-api.md, "commit").
+ *                     yes (docs/reference/worker-api.md, "commit").
  *   committed         the server said yes and nothing has been clicked.
  *   acting            the click may have happened. A worker that finds this
  *                     phase with no result **never clicks again**: it reports
@@ -27,9 +27,9 @@
  *   acted             the click happened and what it produced is recorded.
  *
  * So a crash anywhere costs at most one verification, and never a second
- * click. That is the whole design (ADR-004), and runner_test proves it by
- * killing the worker after every single storage write, request and page
- * command of a job.
+ * click. That is the whole design (ADR-004), and tests/worker/kill_loop_test.js
+ * proves it by killing the worker after every single storage write, request
+ * and page command of a job.
  *
  * ## Reports are written before they are sent
  *

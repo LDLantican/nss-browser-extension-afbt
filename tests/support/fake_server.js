@@ -1,7 +1,7 @@
 /**
  * The worker API, in memory, for tests that cannot reach a web app.
  *
- * It follows the contract in the web app's docs/worker-api.md — the claim and
+ * It follows the contract in the web app's docs/reference/worker-api.md — the claim and
  * its lease, the commit point, verification, the reaper, idempotent reports,
  * and decide()'s table of what each failure leads to — closely enough that the
  * runtime cannot tell it from the real thing on the paths it uses. It is not
@@ -123,7 +123,7 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
 
     delivery: (id) => server.deliveries.find((delivery) => delivery.id === id) || null,
 
-    /** The reaper (docs/worker-api.md, "The reaper"). */
+    /** The reaper (docs/reference/worker-api.md, "The reaper"). */
     sweep() {
       for (const d of server.deliveries) {
         if (!["claimed", "committing"].includes(d.status) || d.lease_ms >= server.now()) continue;
@@ -160,7 +160,7 @@ export function create_fake_server(world, { version = "test", lease_s = 120, use
   }
 
   /**
-   * The import's two endpoints (docs/worker-api.md, "Importing"): the
+   * The import's two endpoints (docs/reference/worker-api.md, "Importing"): the
    * connection's gates, its scope by the marker, created or unchanged by
    * number. Enough of the web app's rules for the extension
    * to be unable to tell; the rules themselves are proven in the web app's

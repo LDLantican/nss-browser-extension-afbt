@@ -1,7 +1,7 @@
 /**
  * What can go wrong with a job, in the words the server uses.
  *
- * The classes are the worker API's `error_class` vocabulary (docs/worker-api.md
+ * The classes are the worker API's `error_class` vocabulary (docs/reference/worker-api.md
  * in the web app, "fail"). An adapter says which one applies and the server
  * decides what follows — retried, routed to somebody else, or handed to a
  * person. Nothing on this side retries a job by itself; the queue does.

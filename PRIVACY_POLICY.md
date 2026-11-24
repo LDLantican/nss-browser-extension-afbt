@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Effective Date:** October 20, 2026
+**Effective Date:** November 24, 2026
 **Developer:** NSS David
 **Contact:** [david@nowsoftwaresolutions.com](mailto:david@nowsoftwaresolutions.com)
 
@@ -23,7 +23,7 @@
 ## 1. Overview
 
 This browser extension was developed by **NSS David** for Alabama Signature
-Homes. It does two things:
+Homes. It does three things:
 
 1. **Imports** work orders you select on **AppFolio**'s work-order pages into the
    **Alabama Signature Homes web app**.
@@ -34,8 +34,8 @@ Homes. It does two things:
    web app's behalf: it creates the inspection, fills in its areas and items,
    attaches its photographs and marks it done, in a background tab.
 
-There is no third-party service involved in either. Data goes between AppFolio
-and Alabama Signature Homes' own web app, and nowhere else.
+There is no third-party service involved in any of them. Data goes between
+AppFolio and Alabama Signature Homes' own web app, and nowhere else.
 
 ---
 
@@ -49,8 +49,10 @@ The information the extension reads and sends is:
 - **Work order details already shown in your AppFolio account** — number,
   street, unit, city, state, ZIP, description, and AppFolio's own id and address
   for the work order — for the work orders you tick and import, along with the
-  name of the company the AppFolio page shows, so the web app can check it is the
-  right one. These are sent to the web app you configure.
+  name of the company the AppFolio page shows and the page's host name (for
+  example `camelot.appfolio.com`), so the web app can tell which AppFolio
+  account they came from and check it is the right one. These are sent to the
+  web app you configure.
 - **Your email address and password**, at the moment you sign in, sent once to
   the configured web app in exchange for a device token. The password is not
   stored by the extension and is not sent anywhere else or at any other time.
@@ -70,7 +72,8 @@ The information the extension reads and sends is:
   nowhere else; and AppFolio's id and address for the inspection it created,
   reported back to the web app.
 - **Whether this browser is signed in to the property manager's AppFolio**,
-  reported to the web app, as for the vendor portal.
+  reported to the web app, as for the vendor portal. The check-in reports this
+  for every connection this browser can work.
 
 ---
 
@@ -88,11 +91,21 @@ The extension sends:
 - your credentials once at sign-in; a device token once an hour to obtain a
   short-lived access token; and the access token on each later request;
 - once a minute, a check-in saying whether this browser is processing jobs, which
-  extension and adapter versions it runs, and whether it is signed in to the
-  vendor portal; and the results of the jobs it works.
+  extension and adapter versions it runs, and, for each connection it can work,
+  whether it is signed in there — the vendor portal and the property manager's
+  AppFolio; and the results of the jobs it works.
 
 To **AppFolio's vendor portal**, only by using the portal's own pages in a tab,
-as a person would. Nothing is sent to AppFolio outside those pages.
+as a person would. To the **property manager's AppFolio**, the same way: an
+approved inspection is typed into its inspection pages and its photographs
+attached there, in a tab, as a person would. Nothing is sent to AppFolio outside
+those pages.
+
+To find out whether this browser is still signed in to either AppFolio site,
+the extension may open the site in a background tab of its ASH group every few
+minutes, see whether it lands signed in or on AppFolio's sign-in page, and close
+the tab again. It does this only while **Process ASH jobs** is switched on, and
+only when the answer could change the work it is offered.
 
 ---
 
@@ -101,24 +114,37 @@ as a person would. Nothing is sent to AppFolio outside those pages.
 Stored in your browser's local storage (`chrome.storage.local`):
 
 - the web app's address;
-- the device token issued at sign-in, the device's name, and your name and email
-  as the web app reported them;
+- the identity record made at sign-in: the device token, the device's name, the
+  worker number and unique worker id the web app gave this browser, and your name and
+  email as the web app reported them;
 - the delivery worker's state: whether processing is switched on, the web app's
-  last answer about the connections this browser may work, results not yet
-  delivered to the web app, and a short list of recent jobs;
-- whether this browser was last seen signed in to the vendor portal.
+  last answer about the connections this browser may work, the last check-in's
+  outcome (`ash_worker_status`), results not yet delivered to the web app, and a
+  short list of recent jobs;
+- which jobs were rehearsed while a connection was in dry run, so they are not
+  rehearsed again (`ash_worker_rehearsed`), and whether the troubleshooting
+  switch "Stop after the next press" is armed (`ash_worker_stop_after_press`);
+- whether this browser was last seen signed in to the vendor portal, and to the
+  property manager's AppFolio (`ash_pm_session`);
+- if the extension's own pretend portals are opened (by its tests), their
+  made-up work orders and inspections (`fixture_site`,
+  `appfolio_vendor_fixture`, `appfolio_pm_fixture`).
 
 Stored in session storage (`chrome.storage.session`), which the browser discards
-when it closes: the hourly access token, the job in hand, and which tabs the
-extension opened for it.
+when it closes: the hourly access token, the job in hand, which tabs the
+extension opened for it, and which tab group is its ASH group
+(`ash_worker_group`).
 
 None of this is synced between devices or uploaded anywhere by the extension.
 
 **Your password is never stored.**
 
-You can remove all of it by signing out in the extension's settings or
-uninstalling the extension. You can also retire this browser from the **Your
-Account** page of the web app, which is the right thing to do if the browser is
+Signing out in the extension's settings removes the identity record and the
+access token, the job in hand (closing its tab), results not yet delivered, the
+web app's last answer about the connections, and the last check-in's outcome.
+Everything else listed above stays until you remove the extension, and removing
+the extension removes all of it. You can also retire this browser from the
+**Your Account** page of the web app, which is the right thing to do if the browser is
 one you no longer control — it ends the device token on the server, so it stops
 working even if the extension is still installed.
 
@@ -140,15 +166,17 @@ This extension does **not**:
 | Permission | Why |
 | --- | --- |
 | `storage` | Keep the settings, the device token and the delivery worker's state in your browser. |
-| `tabs` | Open a vendor-portal tab for a job, know when it has loaded, and close it afterwards. |
-| `tabGroups` | Gather the tabs it opens into one collapsed group named ASH. |
+| `tabs` | Open a vendor-portal or property-manager tab for a job, or a short-lived tab to check you are signed in, know when it has loaded, and close it afterwards; find a tab a job's page opened, by reading open tabs' addresses and which tab opened them; and bring a tab to the front when a job is waiting for you. |
+| `tabGroups` | Gather the tabs it opens into one group named ASH, kept open, because the browser freezes the tabs of a collapsed group. |
 | `alarms` | Check for approved work once a minute, which survives the extension's background worker being stopped. |
 | `notifications` | Tell you when a job is waiting for you to press something, since the popup is usually closed. |
 | Access to AppFolio work-order pages | Read the work orders shown on them, add status badges and the Import bar. |
 | Access to AppFolio's vendor portal | Work approved jobs there, and notice whether you are signed in. |
-| Access to the web app address you enter | Sign in, import work orders and work the delivery queue. Requested at the moment you save the address, and never granted in advance. |
+| Access to the property manager's AppFolio inspection pages | Put approved inspections in, and notice whether you are signed in. One small script (`page_bridge.js`) runs in the page's own JavaScript world, because AppFolio's address search and inspection list can only be driven from there; it also waits for AppFolio to finish saving each change. |
+| Access to the web app address you enter | Sign in, import work orders and work the delivery queue. Requested at the moment you save the address, and never granted in advance. It can only be granted for `alabamasignaturehomes.com` and its subdomains, or `localhost` and `127.0.0.1` on this computer. |
 
-Browsing history is not accessed. Cookies are not read; the extension's requests
+Browsing history is not accessed; the addresses of open tabs are read only to
+find the tabs a job opened. Cookies are not read; the extension's requests
 to the web app deliberately carry no cookies and are authenticated by its tokens
 alone.
 

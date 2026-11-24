@@ -1,5 +1,5 @@
 /**
- * The worker API, as this browser calls it (the web app's docs/worker-api.md).
+ * The worker API, as this browser calls it (the web app's docs/reference/worker-api.md).
  *
  * ## Two tokens, kept in two places (ADR-007)
  *

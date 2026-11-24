@@ -2,7 +2,8 @@
  * The appfolio_pm adapter's reach into AppFolio's own JavaScript, run in the
  * page's world ("world": "MAIN" in the manifest) on the inspection list, the
  * New Inspection form and an inspection. page.js cannot do these from the extension's isolated
- * world, and the worker's tab is a background tab in the collapsed ASH group,
+ * world, and the worker's tab is a background tab in the ASH group (kept open
+ * since 4.1.11, because Chrome freezes a collapsed group's tabs),
  * where the page's own controls do not behave as they do under a person's hand.
  *
  * Three things, each found by a live run on 2026-10-22:

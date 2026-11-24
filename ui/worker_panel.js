@@ -8,7 +8,7 @@
  * the web app, through a heartbeat sent at once.
  */
 
-/** The heartbeat's reasons (the web app's docs/worker-api.md), as a person reads them. */
+/** The heartbeat's reasons (the web app's docs/reference/worker-api.md), as a person reads them. */
 const REASONS = {
   worker_revoked: "This browser's sign-in was ended on the web app. Sign in again in Settings.",
   heartbeat_stale: "Waiting for this browser's next check-in.",

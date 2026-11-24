@@ -11,7 +11,7 @@
  * Node (tests/support/fake_pm.js).
  *
  * The shape is what was read off Camelot's AppFolio on 2026-10-20
- * (docs/pm-adapter.md): a new inspection starts from AppFolio's default
+ * (docs/reference/pm-adapter.md): a new inspection starts from AppFolio's default
  * layout, below, exactly.
  *
  * Every create, item save, upload, area or item added or removed, and done

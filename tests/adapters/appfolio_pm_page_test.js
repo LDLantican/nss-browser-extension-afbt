@@ -9,7 +9,7 @@
  * list's filter — so this is the page script's selectors, its React-style
  * typing and its search-box driving tested against the shapes AppFolio has.
  * It cannot prove AppFolio has not changed since, nor settle what was not seen
- * live (docs/pm-adapter.md); the rollout ladder's probe and dry run do that.
+ * live (docs/reference/pm-adapter.md); the rollout ladder's probe and dry run do that.
  *
  * Each test gets its own books (`?store=`) and frame id.
  */
